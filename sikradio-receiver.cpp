@@ -11,11 +11,20 @@
 #include <assert.h>
 #include <cstdlib>
 #include <stdbool.h>
+#include <vector>
 
 #include "err.h"
 #include "utils.h"
 
+#define BROADCAST_IP "255.255.255.255"
+
+struct ControlData {
+    uint16_t port;
+    const char *addr;
+};
+
 struct LockedData *ld;
+std::vector<RadioStation> stations;
 
 void start_new_session(uint64_t session_id, uint64_t first_byte_num) {
     ld->session = session_id;
@@ -157,10 +166,49 @@ void* writer_main(__attribute__((unused)) void *arg) {
     return 0;
 }
 
+void* send_lookup(void *arg) {
+    // uint16_t data = *(static_cast<uint16_t*>(arg));
+    struct ControlData *data = static_cast<struct ControlData*>(arg);
+    uint16_t port = data->port;
+    const char *message = "ZERO_SEVEN_COME_IN\n";
+    int broadcast_permission = 1;
+    int socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (socket_fd < 0) {
+        fatal("socket() failed");
+    }
+
+    // Set socket options to allow broadcast
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_BROADCAST, (void *)&broadcast_permission,
+                   sizeof(broadcast_permission)) < 0) {
+        fatal("setsockopt() failed");
+    }
+
+    // Set up the destination address
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    // addr.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+    if (inet_aton(data->addr, &addr.sin_addr) == 0) {
+        fatal("invalid discovery address");
+    }
+    addr.sin_port = htons(port);
+
+    // Send the broadcast message
+    while (true) {
+        if (sendto(socket_fd, message, strlen(message), 0, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+            fatal("sendto() failed");
+        }
+        sleep(5);
+    }
+}
+
 int main(int argc, char *argv[]) {
     uint16_t data_port = 29978;
     size_t bsize = 655368;
+    uint16_t control_port = 39978;
     const char* src_addr = NULL;
+    const char* discover_addr = BROADCAST_IP;
+    uint16_t ui_port = 19978;
     int flag;
     while((flag = getopt(argc, argv, "a:P:b:")) != -1) {
         switch(flag) {
@@ -173,6 +221,15 @@ int main(int argc, char *argv[]) {
             case 'b':
                 bsize = atoi(optarg);
                 break;
+            case 'C':
+                control_port = read_port(optarg);
+                break;
+            case 'd':
+                discover_addr = optarg;
+                break;
+            case 'U':
+                ui_port = read_port(optarg);
+                break;
             default:
                 fatal("Wrong flag");
         }
@@ -183,6 +240,14 @@ int main(int argc, char *argv[]) {
     if (bsize < 1) {
         fatal("Wrong buffer size");
     }
+
+    struct ControlData *ctrl_data = static_cast<struct ControlData*>(std::malloc(sizeof(struct ControlData)));
+    ctrl_data->addr = discover_addr;
+    ctrl_data->port = control_port;
+
+    pthread_t send_lookup_thread;
+    pthread_create(&send_lookup_thread, NULL, send_lookup, static_cast<void*>(ctrl_data));
+
     char *receive_buf = static_cast<char*>(std::malloc(65536 + 16));
 
     int socket_fd = bind_socket(data_port);
@@ -205,6 +270,8 @@ int main(int argc, char *argv[]) {
 
     pthread_t writer_thread;
     pthread_t reader_thread;
+
+
     pthread_create(&writer_thread, NULL, writer_main, NULL);
     pthread_create(&reader_thread, NULL, reader_main, NULL);
 

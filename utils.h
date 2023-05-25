@@ -33,6 +33,12 @@ struct LockedData {
   char *src_addr;
 };
 
+struct RadioStation {
+  char *name;
+  char *mcast_addr;
+  uint16_t data_port;
+};
+
 uint64_t max(uint64_t a, uint64_t b) {
   return a > b ? a : b;
 }
@@ -90,12 +96,33 @@ size_t read_message(int socket_fd, struct sockaddr_in *client_address, void *buf
     int flags = 0; // we do not request anything special
     errno = 0;
     ssize_t len = 0; 
+
+    struct addrinfo hints, *expected_ip;
+    char ip_str[INET6_ADDRSTRLEN];
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    CHECK(getaddrinfo(expected_src_addr, NULL, &hints, &expected_ip));
+
+    void *addr;
+
+    if (expected_ip->ai_family == AF_INET) {
+        // IPv4 address
+        struct sockaddr_in *ipv4 = (struct sockaddr_in *)expected_ip->ai_addr;
+        addr = &(ipv4->sin_addr);
+    } else {
+        // IPv6 address
+        struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)expected_ip->ai_addr;
+        addr = &(ipv6->sin6_addr);
+    }
+
+    // Convert the IP address to a string
+    inet_ntop(expected_ip->ai_family, addr, ip_str, sizeof(ip_str));
+
     do {
         len = recvfrom(socket_fd, buffer, max_length, flags,
                       (struct sockaddr *) client_address, &address_length);
-    } while (strcmp(inet_ntoa(client_address->sin_addr), expected_src_addr) != 0 && 
-             strcmp(expected_src_addr, "localhost") != 0 && 
-             strcmp(inet_ntoa(client_address->sin_addr),"127.0.0.1") != 0);
+    } while (expected_src_addr != NULL && strcmp(ip_str, inet_ntoa(client_address->sin_addr)) != 0);
     if (len < 0) {
         PRINT_ERRNO();
     }
