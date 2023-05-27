@@ -13,8 +13,11 @@
 #include <sys/types.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <string>
 
 #include "err.h"
+
+#define MAX_UDP_DATAGRAM_SIZE 65507
 
 struct LockedData {
   pthread_mutex_t mutex;
@@ -34,10 +37,18 @@ struct LockedData {
 };
 
 struct RadioStation {
-  char *name;
-  char *mcast_addr;
+  std::string name;
+  const char *mcast_addr;
   uint16_t data_port;
 };
+
+bool operator<(const struct RadioStation& a, const struct RadioStation& b) {
+    return a.name < b.name;
+}
+
+bool operator==(const struct RadioStation& a, const struct RadioStation& b) {
+  return a.name == b.name && strcmp(a.mcast_addr, b.mcast_addr) == 0 && a.data_port == b.data_port;
+}
 
 uint64_t max(uint64_t a, uint64_t b) {
   return a > b ? a : b;
@@ -102,22 +113,23 @@ size_t read_message(int socket_fd, struct sockaddr_in *client_address, void *buf
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
-    CHECK(getaddrinfo(expected_src_addr, NULL, &hints, &expected_ip));
+    if (expected_src_addr != NULL) {
+        CHECK(getaddrinfo(expected_src_addr, NULL, &hints, &expected_ip));
+        void *addr;
+        if (expected_ip->ai_family == AF_INET) {
+            // IPv4 address
+            struct sockaddr_in *ipv4 = (struct sockaddr_in *)expected_ip->ai_addr;
+            addr = &(ipv4->sin_addr);
+        } else {
+            // IPv6 address
+            struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)expected_ip->ai_addr;
+            addr = &(ipv6->sin6_addr);
+        }
 
-    void *addr;
-
-    if (expected_ip->ai_family == AF_INET) {
-        // IPv4 address
-        struct sockaddr_in *ipv4 = (struct sockaddr_in *)expected_ip->ai_addr;
-        addr = &(ipv4->sin_addr);
-    } else {
-        // IPv6 address
-        struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)expected_ip->ai_addr;
-        addr = &(ipv6->sin6_addr);
+        // Convert the IP address to a string
+        inet_ntop(expected_ip->ai_family, addr, ip_str, sizeof(ip_str));
     }
 
-    // Convert the IP address to a string
-    inet_ntop(expected_ip->ai_family, addr, ip_str, sizeof(ip_str));
 
     do {
         len = recvfrom(socket_fd, buffer, max_length, flags,
@@ -139,6 +151,66 @@ void send_message(int socket_fd, const struct sockaddr_in *send_address,
     if (sent_length < 0) {
         PRINT_ERRNO();
     }
+}
+
+inline static void set_port_reuse(int socket_fd) {
+    int option_value = 1;
+    CHECK_ERRNO(setsockopt(socket_fd, SOL_SOCKET, SO_REUSEPORT, &option_value, sizeof(option_value)));
+}
+
+inline static void set_addr_reuse(int socket_fd) {
+    int option_value = 1;
+    CHECK_ERRNO(setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &option_value, sizeof(option_value)));
+}
+
+inline static int open_udp_socket() {
+    int socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (socket_fd < 0) {
+        PRINT_ERRNO();
+    }
+
+    return socket_fd;
+}
+
+inline static void bind_socket2(int socket_fd, uint16_t port) {
+    struct sockaddr_in address;
+    address.sin_family = AF_INET; // IPv4
+    address.sin_addr.s_addr = htonl(INADDR_ANY); // listening on all interfaces
+    address.sin_port = htons(port);
+
+    // bind the socket to a concrete address
+    CHECK_ERRNO(bind(socket_fd, (struct sockaddr *) &address,
+                     (socklen_t) sizeof(address)));
+
+}
+
+inline static int open_tcp_socket() {
+    int socket_fd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (socket_fd < 0) {
+        PRINT_ERRNO();
+    }
+
+    return socket_fd;
+}
+
+inline static int accept_connection(int socket_fd, struct sockaddr_in *client_address) {
+    socklen_t client_address_length = (socklen_t) sizeof(*client_address);
+
+    int client_fd = accept(socket_fd, (struct sockaddr *) client_address, &client_address_length);
+    if (client_fd < 0) {
+        PRINT_ERRNO();
+    }
+
+    return client_fd;
+}
+
+inline static size_t receive_message(int socket_fd, void *buffer, size_t max_length, int flags) {
+    errno = 0;
+    ssize_t received_length = recv(socket_fd, buffer, max_length, flags);
+    if (received_length < 0) {
+        PRINT_ERRNO();
+    }
+    return (size_t) received_length;
 }
 
 #endif // UTILS_H

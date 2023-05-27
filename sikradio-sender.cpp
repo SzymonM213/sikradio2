@@ -18,10 +18,10 @@
 #include <stdio.h>
 #include <time.h>
 
-// #include "err.h"
+#include "err.h"
 #include "utils.h"
 
-#define MAX_UDP_DATAGRAM_SIZE 65507
+#define TTL_VALUE 4
 
 struct ControlData {
     uint16_t port;
@@ -52,69 +52,66 @@ struct sockaddr_in get_send_address(const char *host, uint16_t port) {
 }
 
 void* handle_control_port(void *arg) {
-    int socket_fd;
+    int socket_fd = open_udp_socket();
+    set_port_reuse(socket_fd);
+
+    /* uaktywnienie rozgłaszania (ang. broadcast) */
+    int optval = 1;
+    CHECK_ERRNO(setsockopt(socket_fd, SOL_SOCKET, SO_BROADCAST, (void *) &optval, sizeof optval));
+
+    /* ustawienie TTL dla datagramów rozsyłanych do grupy */
+    optval = TTL_VALUE;
+    CHECK_ERRNO(setsockopt(socket_fd, IPPROTO_IP, IP_MULTICAST_TTL, (void *) &optval, sizeof optval));
+
     struct sockaddr_in addr;
-    char *buffer = (char *) malloc(MAX_UDP_DATAGRAM_SIZE);
     ControlData *control_data = (ControlData *) arg;
     uint16_t port = control_data->port;
 
     std::string msg = "BOREWICZ_HERE " + std::string(control_data->mcast_addr) + " " + 
                       std::to_string(control_data->data_port) + " " + control_data->name + "\n";
 
-    // Create a socket
-    socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (socket_fd < 0) {
-        perror("Failed to create socket");
-        exit(EXIT_FAILURE);
-    }
+    // // Bind the socket to a specific port
+    // memset(&addr, 0, sizeof(addr));
+    // addr.sin_family = AF_INET;
+    // addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    // addr.sin_port = htons(port);
 
-    // Enable SO_REUSEADDR flag
-    int reuseaddr = 1;
-    if (setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr, sizeof(reuseaddr)) < 0) {
-        perror("Failed to set SO_REUSEADDR");
-        exit(EXIT_FAILURE);
+    struct ip_mreq ip_mreq;
+    ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+    // ip_mreq.imr_multiaddr = control_data->mcast_addr->sin_addr;
+    if (inet_aton(control_data->mcast_addr, &ip_mreq.imr_multiaddr) == 0) {
+        fatal("inet_aton - invalid multicast address\n");
     }
+    CHECK_ERRNO(setsockopt(socket_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, (void *) &ip_mreq, sizeof ip_mreq));
 
-    // Bind the socket to a specific port
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(port);
-
-    if (bind(socket_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("Failed to bind socket");
-        exit(EXIT_FAILURE);
-    }
+    bind_socket2(socket_fd, port);
 
     while (true) {
+        char *buffer = (char *) malloc(MAX_UDP_DATAGRAM_SIZE);
         struct sockaddr_in sender_addr;
         socklen_t sender_addr_len = sizeof(sender_addr);
-        ssize_t len = recvfrom(socket_fd, buffer, MAX_UDP_DATAGRAM_SIZE, 0,
-                                (struct sockaddr *) &sender_addr, &sender_addr_len);
-        if (len < 0) {
-            fatal("Failed to receive data");
-        }
+        size_t len = read_message(socket_fd, &sender_addr, buffer, MAX_UDP_DATAGRAM_SIZE, NULL);
+        
         if (strcmp(buffer, "ZERO_SEVEN_COME_IN\n") == 0) {
-            int socket_fd = socket(PF_INET, SOCK_DGRAM, 0);
-            if (socket_fd < 0) {
-                PRINT_ERRNO();
-            }
+            std::cout << "addr: " << inet_ntoa(sender_addr.sin_addr) << std::endl;
             send_message(socket_fd, &sender_addr, msg.c_str(), msg.length());
+            std::cout << "Sent " << port << std::endl;
         } else {
             // TODO: handle REXMIT
         }
+        free(buffer);
     }
 }
 
 int main(int argc, char* argv[]) {
     uint64_t session_id = time(NULL);
     const char* mcast_addr = NULL;
-    uint16_t data_port = 29978;
-    uint16_t ctrl_port = 39978;
+    uint16_t data_port = 29956;
+    uint16_t ctrl_port = 39956;
     size_t psize = 512;
     size_t fsize = 128 * 1024;
     size_t rtime = 250;
-    std::string name = "\"Nienazwany Nadajnik\"";
+    std::string name = "Nienazwany Nadajnik";
     int flag;
     while((flag = getopt(argc, argv, "a:P:p:n:")) != -1) {
         switch(flag) {
@@ -149,10 +146,8 @@ int main(int argc, char* argv[]) {
     if (psize < 1 || psize > 65535 - 16) {
         fatal("Wrong psize");
     }
-    if (name.length() <= 2 || name[0] != '"' || name[name.length() - 1] != '"') {
+    if (name.length() == 0) {
         fatal("wrong name");
-    } else {
-        name = name.substr(1, name.length() - 2);
     }
 
     struct ControlData control_data = {ctrl_port, mcast_addr, data_port, name.c_str()};
