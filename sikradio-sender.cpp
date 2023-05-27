@@ -70,6 +70,8 @@ void* handle_control_port(void *arg) {
     std::string msg = "BOREWICZ_HERE " + std::string(control_data->mcast_addr) + " " + 
                       std::to_string(control_data->data_port) + " " + control_data->name + "\n";
 
+    std::cout << "length " << msg.length() << std::endl;
+
     // // Bind the socket to a specific port
     // memset(&addr, 0, sizeof(addr));
     // addr.sin_family = AF_INET;
@@ -95,7 +97,7 @@ void* handle_control_port(void *arg) {
         if (strcmp(buffer, "ZERO_SEVEN_COME_IN\n") == 0) {
             std::cout << "addr: " << inet_ntoa(sender_addr.sin_addr) << std::endl;
             send_message(socket_fd, &sender_addr, msg.c_str(), msg.length());
-            std::cout << "Sent " << port << std::endl;
+            std::cout << "Sent " << msg.length() << std::endl;
         } else {
             // TODO: handle REXMIT
         }
@@ -106,8 +108,8 @@ void* handle_control_port(void *arg) {
 int main(int argc, char* argv[]) {
     uint64_t session_id = time(NULL);
     const char* mcast_addr = NULL;
-    uint16_t data_port = 29956;
-    uint16_t ctrl_port = 39956;
+    uint16_t data_port = 29978;
+    uint16_t ctrl_port = 39978;
     size_t psize = 512;
     size_t fsize = 128 * 1024;
     size_t rtime = 250;
@@ -172,7 +174,7 @@ int main(int argc, char* argv[]) {
     while(fread(packet + 2 * sizeof(uint64_t), 1, psize, stdin)) {
         first_byte_to_send = htobe64(first_byte_num);
         memcpy(packet + sizeof(uint64_t), &first_byte_to_send, sizeof(uint64_t));
-        send_message(socket_fd, &send_address, packet, psize);
+        send_message(socket_fd, &send_address, packet, psize + 16);
         first_byte_num += psize;
     }
     free(packet);

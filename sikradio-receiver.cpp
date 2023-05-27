@@ -12,17 +12,33 @@
 #include <cstdlib>
 #include <stdbool.h>
 #include <map>
+#include <vector>
 #include <string>
 #include <iostream>
 #include <sstream>
 #include <poll.h>
 #include <sys/time.h>
+#include <fcntl.h>
+#include <netinet/tcp.h>
+#include <thread>
+#include <regex>
 
 #include "err.h"
 #include "utils.h"
 
 #define BROADCAST_IP "255.255.255.255"
 #define TTL_VALUE 4
+
+
+constexpr std::string_view UI_HEADER =
+"------------------------------------------------------------------------\n\r"
+"\n\r"
+"SIK Radio\n\r"
+"\n\r"
+"------------------------------------------------------------------------\n\r";
+
+constexpr std::string_view UI_FOOTER =
+"------------------------------------------------------------------------\n\r";
 
 struct ControlData {
     uint16_t port;
@@ -32,7 +48,7 @@ struct ControlData {
 
 struct LockedData *ld;
 std::map<RadioStation, uint64_t> stations;
-int selected_station = 0;
+std::map<RadioStation, uint64_t>::iterator selected_station;
 pthread_mutex_t stations_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void start_new_session(uint64_t session_id, uint64_t first_byte_num) {
@@ -78,7 +94,7 @@ void* reader_main(__attribute__((unused)) void *arg) {
         session_id = be64toh(session_id);
         first_byte_num = be64toh(first_byte_num);
 
-        pthread_mutex_lock(&ld->mutex);
+        CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
         if (session_id > ld->session) {
             start_new_session(session_id, first_byte_num);
         }
@@ -127,7 +143,7 @@ void* reader_main(__attribute__((unused)) void *arg) {
                 pthread_cond_signal(&ld->write);
             }
         }
-        pthread_mutex_unlock(&ld->mutex);
+        CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     }
 }
 
@@ -136,7 +152,7 @@ void* writer_main(__attribute__((unused)) void *arg) {
     char buf_to_print[65536];
 
     while(true) {
-        pthread_mutex_lock(&ld->mutex);
+        CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
         while (!ld->started_printing || ld->byte_to_write > ld->last_byte_received) {
             pthread_cond_wait(&ld->write, &ld->mutex);
         }
@@ -169,17 +185,17 @@ void* writer_main(__attribute__((unused)) void *arg) {
 
         ld->byte_to_write += ld->psize;
 
-        pthread_mutex_unlock(&ld->mutex);
+        CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
         fwrite(buf_to_print, 1, ld->psize, stdout);
     }
     return 0;
 }
 
-void* send_lookup(void *arg) {
+void send_lookup(uint16_t port, const char *addr, int socket_fd) {
     // uint16_t data = *(static_cast<uint16_t*>(arg));
-    struct ControlData *data = static_cast<struct ControlData*>(arg);
+    // struct ControlData *data = static_cast<struct ControlData*>(arg);
     // uint16_t port = data->port;
-    int socket_fd = data->socket_fd;
+    // int socket_fd = data->socket_fd;
     const char *message = "ZERO_SEVEN_COME_IN\n";
     int broadcast_permission = 1;
 
@@ -190,24 +206,24 @@ void* send_lookup(void *arg) {
     }
 
     // Set up the destination address
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(data->port);
+    struct sockaddr_in dest_addr;
+    memset(&dest_addr, 0, sizeof(dest_addr));
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(port);
 
-    if (inet_aton(data->addr, &addr.sin_addr) == 0) {
+    if (inet_aton(addr, &dest_addr.sin_addr) == 0) {
         fatal("invalid discovery address");
     }
-    addr.sin_port = htons(data->port);
+    dest_addr.sin_port = htons(port);
 
     // Send the broadcast message and update stations
     struct timeval tp;
     while (true) {
-        if (sendto(socket_fd, message, strlen(message), 0, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
+        if (sendto(socket_fd, message, strlen(message), 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0) {
             fatal("sendto() failed");
         }
         std::cout << "=========================\n";
-        pthread_mutex_lock(&stations_mutex);
+        CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
         gettimeofday(&tp, NULL);
         uint64_t time = tp.tv_sec * 1000 + tp.tv_usec / 1000;
         for (const auto &it : stations) {
@@ -216,53 +232,96 @@ void* send_lookup(void *arg) {
             // }
             std::cout << it.first.name << " " << time - it.second << "\n";
         }
-        pthread_mutex_unlock(&stations_mutex);
+        CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
         sleep(5);
     }
 }
 
-void* receive_reply(void *arg) {
+void receive_reply(int socket_fd) {
     struct sockaddr_in sender_addr;
-    int socket_fd = *(static_cast<int*>(arg));
+    // int socket_fd = *(static_cast<int*>(arg));
     
     char *buf = static_cast<char*>(malloc(MAX_UDP_DATAGRAM_SIZE));
+    memset(buf, 0, MAX_UDP_DATAGRAM_SIZE);
 
     struct timeval tp;
+
+    // std::regex reply = std::regex("^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1, 5})\\s([\\x20-\\x7F]{1, 64})\\n$");
+    std::regex reply("^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1,5})\\s([\\x20-\\x7F]{1,64})\\n$");
 
     while (true) {
         // size_t len = read_message(socket_fd, &sender_addr, buf, MAX_UDP_DATAGRAM_SIZE, NULL);
         size_t len = receive_message(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0);
+        // size_t len = recv(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0);
         std::string message(buf, len);
         // std::cout << message;
-        if (message.substr(0, 13) == "BOREWICZ_HERE") {
+        std::smatch matches;
+        if (std::regex_match(message, matches, reply)) {
             gettimeofday(&tp, NULL);
             uint64_t time = tp.tv_sec * 1000 + tp.tv_usec / 1000;
-            std::istringstream ss(message.substr(13));
-            std::string mcast_addr;
-            uint16_t port;
-            std::string name;
-            ss >> mcast_addr >> port >> name;
+            // std::istringstream ss(message.substr(13));
+            // std::string mcast_addr;
+            // uint16_t port;
+            // std::string name;
+            // ss >> mcast_addr >> port >> name;
+            std::string mcast_addr = matches[1];
+            size_t port = std::stoul(matches[2]);
+            std::string name = matches[3];
+            if (port > UINT16_MAX) {
+                continue;
+            }
             RadioStation station = {name, mcast_addr.c_str(), port};
+            std::cout << "Received: " << station.name << " " << station.mcast_addr << " " << station.data_port << "\n";
             pthread_mutex_lock(&stations_mutex);
             stations[station] = time;
+            if (stations.size() == 1) {
+                selected_station = stations.begin();
+            }
             pthread_mutex_unlock(&stations_mutex);
         }
     }
 }
 
-void* handle_ui(void *arg) {
-    uint16_t port = *(static_cast<uint16_t*>(arg));
+std::string make_ui() {
+    std::string result = "\033[2J\033[H";
+    result += UI_HEADER;
+    CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
+    for (auto it = stations.begin(); it != stations.end(); it++) {
+        if (it == selected_station) {
+            result += " > ";
+        }
+        result += it->first.name + "\n\r";
+    }
+    CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
+    result += UI_FOOTER;
+    return result;
+}
+
+void handle_ui(uint16_t port) {
+    // uint16_t port = *(static_cast<uint16_t*>(arg));
     int connections = 5;
-    char buf[3];
-    struct pollfd poll_descriptors[connections];
+    int buf_size = 4;
+
+    // char buf[connections][buf_size];
+    std::vector<char *> buf(connections);
+    const char* set_character_mode = "^]mode char\n";
+
+    std::vector<ssize_t> buf_len(connections);
+    std::vector<ssize_t> buf_pos(connections);
+
+    // struct pollfd poll_descriptors[connections];
+    std::vector<struct pollfd> poll_descriptors(connections);
     for (int i = 0; i < connections; i++) {
         poll_descriptors[i].fd = -1;
         poll_descriptors[i].events = POLLIN;
         poll_descriptors[i].revents = 0;
+        buf[i] = static_cast<char*>(malloc(buf_size));
     }
     size_t active_clients = 0;
 
     poll_descriptors[0].fd = open_tcp_socket();
+
+    set_port_reuse(poll_descriptors[0].fd);
 
     bind_socket2(poll_descriptors[0].fd, port);
 
@@ -274,34 +333,53 @@ void* handle_ui(void *arg) {
             poll_descriptors[i].revents = 0;
         }
 
-        int poll_status = poll(poll_descriptors, connections, -1);
-        if (poll_status < 0) {
+        int poll_status = poll(poll_descriptors.data(), connections, -1);
+        if (poll_status == -1) {
             fatal("poll() failed");
-        }
-        else if (poll_status == 0) {
-            fatal("poll() timed out");
         }
         else {
             if (poll_descriptors[0].revents & POLLIN) {
                 int client_fd = accept_connection(poll_descriptors[0].fd, NULL);
+
+                CHECK_ERRNO(fcntl(client_fd, F_SETFL, O_NONBLOCK)); /* tryb nieblokujący */
+
                 bool accepted = false;
+                int client_id;
                 for (int i = 1; i < connections; ++i) {
                     if (poll_descriptors[i].fd == -1) {
                         poll_descriptors[i].fd = client_fd;
                         poll_descriptors[i].events = POLLIN;
                         active_clients++;
+                        client_id = i;
                         accepted = true;
                         break;
                     }
                 }
                 if (!accepted) {
-                    CHECK_ERRNO(close(client_fd));
-                    fprintf(stderr, "Too many clients\n");
+                    poll_descriptors.push_back(pollfd());
+                    poll_descriptors[connections].fd = client_fd;
+                    poll_descriptors[connections].events = POLLIN;
+                    // buf[connections] = static_cast<char*>(malloc(buf_size));
+                    buf.push_back(static_cast<char*>(malloc(buf_size)));
+                    buf_len.push_back(0);
+                    buf_pos.push_back(0);
+                    connections++;
+                    active_clients++;
+                    // const int disableEcho = 1;
+                    // if (setsockopt(poll_descriptors[connections].fd, IPPROTO_TCP, TCP_NODELAY, &disableEcho, sizeof(int)) < 0) {
+                    //     fatal("setsockopt failed");
+                    // }
+                    client_id = connections;
                 }
+                if (write(client_fd, "\377\375\042\377\373\001",6) < 0) {
+                    CHECK_ERRNO(close(client_fd));
+                    poll_descriptors[client_id].fd = -1;
+                    active_clients -= 1;
+                };
             }
             for (int i = 1; i < connections; i++) {
-                if (poll_descriptors[i].fd != -1 && poll_descriptors[i].revents & (POLLIN | POLLERR)) {
-                    ssize_t received_bytes = read(poll_descriptors[i].fd, buf, 3);
+                if (poll_descriptors[i].fd != -1 && (poll_descriptors[i].revents & (POLLIN | POLLERR))) {
+                    ssize_t received_bytes = read(poll_descriptors[i].fd, buf[i], buf_size);
                     if (received_bytes < 0) {
                         fprintf(stderr, "Error when reading message from connection %d (errno %d, %s)\n", i, errno, strerror(errno));
                         CHECK_ERRNO(close(poll_descriptors[i].fd));
@@ -313,22 +391,67 @@ void* handle_ui(void *arg) {
                         poll_descriptors[i].fd = -1;
                         active_clients -= 1;
                     } else {
-                        std::string message(buf, 3);
-                        std::cout << message;
+                        // std::cout << "Received: " << received_bytes << "\n";
+                        std::string message(buf[i], 3);
+                        buf_len[i] = received_bytes;
+                        buf_pos[i] = 0;
+                        // check down arrow
+                        if(message == "\033[B") {
+                            CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
+                            selected_station++;
+                            if (selected_station == stations.end()) {
+                                selected_station = stations.begin();
+                            } 
+
+                            printf("down: %s\n", selected_station->first.name.c_str());
+
+                            CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
+                        }
+                        // check up arrow
+                        else if(message == "\033[A") {
+                            CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
+                            if (selected_station == stations.begin()) {
+                                selected_station = stations.end();
+                            } 
+                            selected_station--;
+
+                            printf("up: %s\n", selected_station->first.name.c_str());
+
+                            CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
+                        }
                     }
                 }
+
+                std::string msg = make_ui();
+                write(poll_descriptors[i].fd, msg.c_str(), msg.size());
+                
+                // if (poll_descriptors[i].fd != -1 && (poll_descriptors[i].revents & POLLOUT)) {
+                //     ssize_t sent_bytes = write(poll_descriptors[i].fd, buf[i] + buf_pos[i], buf_len[i] - buf_pos[i]);
+                //     if (sent_bytes < 0) {
+                //         fprintf(stderr, "Error when writing message to connection %d (errno %d, %s)\n", i, errno, strerror(errno));
+                //         CHECK_ERRNO(close(poll_descriptors[i].fd));
+                //         poll_descriptors[i].fd = -1;
+                //         active_clients -= 1;
+                //     } 
+                //     else {
+                //         fprintf(stderr, "Sent %zd bytes (connection %d)\n", sent_bytes, i);
+                //         buf_pos[i] += sent_bytes;
+                //         if (buf_pos[i] == buf_len[i]) 
+                //             poll_descriptors[i].events = POLLIN; /* Przełączenie na czytanie */
+                //     }
+                // }
             }
         }
     } while (true);
 }
 
 int main(int argc, char *argv[]) {
-    uint16_t data_port = 29956;
+    uint16_t data_port = 29978;
     size_t bsize = 655368;
-    uint16_t control_port = 39956;
+    uint16_t control_port = 39978;
     const char* src_addr = NULL;
     const char* discover_addr = BROADCAST_IP;
-    uint16_t ui_port = 19956;
+    uint16_t ui_port = 19978;
     int flag;
     while((flag = getopt(argc, argv, "a:P:b:C:d:U")) != -1) {
         switch(flag) {
@@ -361,8 +484,8 @@ int main(int argc, char *argv[]) {
         fatal("Wrong buffer size");
     }
 
-    struct ControlData *ctrl_data = static_cast<struct ControlData*>(std::malloc(sizeof(struct ControlData)));
-    ctrl_data->addr = discover_addr;
+    // struct ControlData *ctrl_data = static_cast<struct ControlData*>(std::malloc(sizeof(struct ControlData)));
+    // ctrl_data->addr = discover_addr;
 
     int socket_fd = open_udp_socket();
 
@@ -397,16 +520,19 @@ int main(int argc, char *argv[]) {
     // CHECK_ERRNO(setsockopt(socket_fd, IPPROTO_IP, IP_MULTICAST_TTL, (void *) &optval, sizeof(optval)));
 
     // bind_socket2(socket_fd, control_port);
-    ctrl_data->socket_fd = socket_fd;
-    ctrl_data->port = control_port;
+    // ctrl_data->socket_fd = socket_fd;
+    // ctrl_data->port = control_port;
 
-    pthread_t send_lookup_thread;
-    pthread_t receive_reply_thread;
-    pthread_t ui_thread;
+    // pthread_t send_lookup_thread;
+    // pthread_t receive_reply_thread;
+    // pthread_t ui_thread;
 
-    pthread_create(&send_lookup_thread, NULL, send_lookup, static_cast<void*>(ctrl_data));
-    pthread_create(&receive_reply_thread, NULL, receive_reply, static_cast<void*>(&socket_fd));
+    // pthread_create(&send_lookup_thread, NULL, send_lookup, static_cast<void*>(ctrl_data));
+    // pthread_create(&receive_reply_thread, NULL, receive_reply, static_cast<void*>(&socket_fd));
     // pthread_create(&ui_thread, NULL, handle_ui, static_cast<void*>(&ui_port));
+    std::thread ui_thread(handle_ui, ui_port);
+    std::thread send_lookup_thread(send_lookup, control_port, discover_addr, socket_fd);
+    std::thread receive_reply_thread(receive_reply, socket_fd);
 
     // char *receive_buf = static_cast<char*>(std::malloc(65536 + 16));
 
@@ -441,7 +567,10 @@ int main(int argc, char *argv[]) {
 
     // pthread_join(reader_thread, NULL);
     // pthread_join(writer_thread, NULL);
-    pthread_join(send_lookup_thread, NULL);
-    pthread_join(receive_reply_thread, NULL);
+    ui_thread.join();
+    send_lookup_thread.join();
+    receive_reply_thread.join();
+    // pthread_join(send_lookup_thread, NULL);
+    // pthread_join(receive_reply_thread, NULL);
     return 0;
 }

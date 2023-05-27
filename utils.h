@@ -146,7 +146,7 @@ void send_message(int socket_fd, const struct sockaddr_in *send_address,
     int send_flags = 0;
     socklen_t address_length = (socklen_t) sizeof(*send_address);
     errno = 0;
-    ssize_t sent_length = sendto(socket_fd, data, size + 16, send_flags, 
+    ssize_t sent_length = sendto(socket_fd, data, size, send_flags, 
                                 (struct sockaddr *) send_address, address_length);
     if (sent_length < 0) {
         PRINT_ERRNO();
