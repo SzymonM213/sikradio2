@@ -29,6 +29,8 @@
 #define BROADCAST_IP "255.255.255.255"
 #define TTL_VALUE 4
 
+std::string fav_name = "";
+int pipe_fd[2];
 
 constexpr std::string_view UI_HEADER =
 "------------------------------------------------------------------------\n\r"
@@ -51,6 +53,53 @@ std::map<RadioStation, uint64_t> stations;
 std::map<RadioStation, uint64_t>::iterator selected_station;
 pthread_mutex_t stations_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+void move_selected_station(bool up) {
+    if (stations.empty()) {
+        return;
+    }
+    if(!up) {
+        // CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
+        selected_station++;
+        if (selected_station == stations.end()) {
+            selected_station = stations.begin();
+        } 
+
+        printf("down: %s\n", selected_station->first.name.c_str());
+
+        // CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
+    }
+    // check up arrow
+    else {
+        // CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
+        if (selected_station == stations.begin()) {
+            selected_station = stations.end();
+        } 
+        selected_station--;
+
+        printf("up: %s\n", selected_station->first.name.c_str());
+
+        // CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
+    }
+}
+
+void remove_station(std::map<RadioStation, uint64_t>::iterator station) {
+    // CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
+    if (station == selected_station) {
+        for (auto it = stations.begin(); it != stations.end(); it++) {
+            if (it->first.name == fav_name) {
+                selected_station = it;
+                return;
+            }
+        }
+        printf("chuj1\n");
+        move_selected_station(false);
+        printf("chuj2\n");
+    }
+    stations.erase(station);
+    printf("new station: ", selected_station->first.name.c_str());
+    // CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
+}
+
 void start_new_session(uint64_t session_id, uint64_t first_byte_num) {
     ld->session = session_id;
     ld->last_byte_received = first_byte_num;
@@ -65,6 +114,19 @@ void start_new_session(uint64_t session_id, uint64_t first_byte_num) {
     for (uint64_t i = 0; i < ld->my_bsize; i++) {
         ld->data[i] = 0;
     }
+}
+
+size_t find_waiting_time() {
+    size_t waiting_time = 20000;
+    struct timeval tp;
+    for (auto it = stations.begin(); it != stations.end(); it++) {
+        gettimeofday(&tp, NULL);
+        uint64_t time = tp.tv_sec * 1000 + tp.tv_usec / 1000;
+        if (time - it->second < waiting_time) {
+            waiting_time = time - it->second;
+        }
+    }
+    return waiting_time;
 }
 
 void print_missing(uint64_t first_byte_num) {
@@ -251,7 +313,8 @@ void receive_reply(int socket_fd) {
 
     while (true) {
         // size_t len = read_message(socket_fd, &sender_addr, buf, MAX_UDP_DATAGRAM_SIZE, NULL);
-        size_t len = receive_message(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0);
+        // size_t len = receive_message(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0);
+        size_t len = recv_with_timeout(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0, 1);
         // size_t len = recv(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0);
         std::string message(buf, len);
         // std::cout << message;
@@ -270,15 +333,38 @@ void receive_reply(int socket_fd) {
             if (port > UINT16_MAX) {
                 continue;
             }
-            RadioStation station = {name, mcast_addr.c_str(), port};
+            RadioStation station = {name, mcast_addr.c_str(), (uint16_t) port};
             std::cout << "Received: " << station.name << " " << station.mcast_addr << " " << station.data_port << "\n";
-            pthread_mutex_lock(&stations_mutex);
-            stations[station] = time;
+            CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
+            if (stations.find(station) != stations.end()) {
+                stations[station] = time;
+            }
+            else {
+                stations.insert({station, time});
+                printf("nowy zjeb\n");
+                write(pipe_fd[1], "a", 1);
+            }
+            // stations[station] = time;
             if (stations.size() == 1) {
                 selected_station = stations.begin();
             }
-            pthread_mutex_unlock(&stations_mutex);
+            CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
         }
+
+        // CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
+        // for (auto it = stations.begin(); it != stations.end();) {
+        //     gettimeofday(&tp, NULL);
+        //     uint64_t time = tp.tv_sec * 1000 + tp.tv_usec / 1000;
+        //     if (it->second + 20000 < time) {
+        //         printf("PAPA SENDER\n");
+        //         remove_station(it++);
+        //         printf("PAPA SENDER2\n");
+        //         write(pipe_fd[1], "r", 1);
+        //     } else {
+        //         it++;
+        //     }
+        // }
+        // CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
     }
 }
 
@@ -320,20 +406,22 @@ void handle_ui(uint16_t port) {
     size_t active_clients = 0;
 
     poll_descriptors[0].fd = open_tcp_socket();
+    poll_descriptors[1].fd = pipe_fd[0];
 
-    set_port_reuse(poll_descriptors[0].fd);
+    set_socket_flag(poll_descriptors[0].fd, SO_REUSEPORT);
 
-    bind_socket2(poll_descriptors[0].fd, port);
+    bind_socket(poll_descriptors[0].fd, port);
 
     int queue_length = 5;
     CHECK_ERRNO(listen(poll_descriptors[0].fd, queue_length));
 
-    do {
+    while (true) {
         for (int i = 0; i < connections; i++) {
             poll_descriptors[i].revents = 0;
         }
 
-        int poll_status = poll(poll_descriptors.data(), connections, -1);
+        size_t timeout = find_waiting_time();
+        int poll_status = poll(poll_descriptors.data(), connections, timeout);
         if (poll_status == -1) {
             fatal("poll() failed");
         }
@@ -345,7 +433,7 @@ void handle_ui(uint16_t port) {
 
                 bool accepted = false;
                 int client_id;
-                for (int i = 1; i < connections; ++i) {
+                for (int i = 2; i < connections; ++i) {
                     if (poll_descriptors[i].fd == -1) {
                         poll_descriptors[i].fd = client_fd;
                         poll_descriptors[i].events = POLLIN;
@@ -365,10 +453,6 @@ void handle_ui(uint16_t port) {
                     buf_pos.push_back(0);
                     connections++;
                     active_clients++;
-                    // const int disableEcho = 1;
-                    // if (setsockopt(poll_descriptors[connections].fd, IPPROTO_TCP, TCP_NODELAY, &disableEcho, sizeof(int)) < 0) {
-                    //     fatal("setsockopt failed");
-                    // }
                     client_id = connections;
                 }
                 if (write(client_fd, "\377\375\042\377\373\001",6) < 0) {
@@ -377,7 +461,17 @@ void handle_ui(uint16_t port) {
                     active_clients -= 1;
                 };
             }
-            for (int i = 1; i < connections; i++) {
+            if (poll_descriptors[1].revents & POLLIN) {
+                ssize_t received_bytes = read(poll_descriptors[1].fd, buf[1], buf_size);
+                std::string msg = make_ui();
+                printf("nowe stacje\n");
+                for (int i = 2; i < connections; i++) {
+                    if (poll_descriptors[i].fd != -1) {
+                        write(poll_descriptors[i].fd, msg.c_str(), msg.size());
+                    }
+                }
+            }
+            for (int i = 2; i < connections; i++) {
                 if (poll_descriptors[i].fd != -1 && (poll_descriptors[i].revents & (POLLIN | POLLERR))) {
                     ssize_t received_bytes = read(poll_descriptors[i].fd, buf[i], buf_size);
                     if (received_bytes < 0) {
@@ -391,58 +485,42 @@ void handle_ui(uint16_t port) {
                         poll_descriptors[i].fd = -1;
                         active_clients -= 1;
                     } else {
-                        // std::cout << "Received: " << received_bytes << "\n";
                         std::string message(buf[i], 3);
                         buf_len[i] = received_bytes;
                         buf_pos[i] = 0;
-                        // check down arrow
                         if(message == "\033[B") {
                             CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
-                            selected_station++;
-                            if (selected_station == stations.end()) {
-                                selected_station = stations.begin();
-                            } 
-
-                            printf("down: %s\n", selected_station->first.name.c_str());
-
+                            move_selected_station(0);
                             CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
                         }
                         // check up arrow
                         else if(message == "\033[A") {
                             CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
-                            if (selected_station == stations.begin()) {
-                                selected_station = stations.end();
-                            } 
-                            selected_station--;
-
-                            printf("up: %s\n", selected_station->first.name.c_str());
-
+                            move_selected_station(1);
                             CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
                         }
                     }
                 }
-
                 std::string msg = make_ui();
-                write(poll_descriptors[i].fd, msg.c_str(), msg.size());
-                
-                // if (poll_descriptors[i].fd != -1 && (poll_descriptors[i].revents & POLLOUT)) {
-                //     ssize_t sent_bytes = write(poll_descriptors[i].fd, buf[i] + buf_pos[i], buf_len[i] - buf_pos[i]);
-                //     if (sent_bytes < 0) {
-                //         fprintf(stderr, "Error when writing message to connection %d (errno %d, %s)\n", i, errno, strerror(errno));
-                //         CHECK_ERRNO(close(poll_descriptors[i].fd));
-                //         poll_descriptors[i].fd = -1;
-                //         active_clients -= 1;
-                //     } 
-                //     else {
-                //         fprintf(stderr, "Sent %zd bytes (connection %d)\n", sent_bytes, i);
-                //         buf_pos[i] += sent_bytes;
-                //         if (buf_pos[i] == buf_len[i]) 
-                //             poll_descriptors[i].events = POLLIN; /* Przełączenie na czytanie */
-                //     }
-                // }
+                for (int j = 2; j < connections; j++) {
+                    write(poll_descriptors[j].fd, msg.c_str(), msg.size());
+                }
+            }   
+        }
+        struct timeval tp;
+        CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
+        for (auto it = stations.begin(); it != stations.end();) {
+            gettimeofday(&tp, NULL);
+            uint64_t time = tp.tv_sec * 1000 + tp.tv_usec / 1000;
+            if (it->second + 20000 < time) {
+                remove_station(it++);
+                write(pipe_fd[1], "r", 1);
+            } else {
+                it++;
             }
         }
-    } while (true);
+        CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
+    } 
 }
 
 int main(int argc, char *argv[]) {
@@ -453,7 +531,7 @@ int main(int argc, char *argv[]) {
     const char* discover_addr = BROADCAST_IP;
     uint16_t ui_port = 19978;
     int flag;
-    while((flag = getopt(argc, argv, "a:P:b:C:d:U")) != -1) {
+    while((flag = getopt(argc, argv, "a:P:b:C:d:U:n")) != -1) {
         switch(flag) {
             case 'a':
                 src_addr = optarg;
@@ -473,6 +551,9 @@ int main(int argc, char *argv[]) {
             case 'U':
                 ui_port = read_port(optarg);
                 break;
+            case 'n':
+                fav_name = optarg;
+                break;
             default:
                 fatal("Wrong flag");
         }
@@ -490,15 +571,19 @@ int main(int argc, char *argv[]) {
     int socket_fd = open_udp_socket();
 
     /* uaktywnienie rozgłaszania (ang. broadcast) */
-    int optval = 1;
-    CHECK_ERRNO(setsockopt(socket_fd, SOL_SOCKET, SO_BROADCAST, (void *) &optval, sizeof optval));
+    // int optval = 1;
+    // CHECK_ERRNO(setsockopt(socket_fd, SOL_SOCKET, SO_BROADCAST, (void *) &optval, sizeof optval));
+    set_socket_flag(socket_fd, SO_BROADCAST);
 
     // /* ustawienie TTL dla datagramów rozsyłanych do grupy */
     // optval = TTL_VALUE;
     // CHECK_ERRNO(setsockopt(socket_fd, IPPROTO_IP, IP_MULTICAST_TTL, (void *) &optval, sizeof optval));
 
-    set_port_reuse(socket_fd);
-    set_addr_reuse(socket_fd);
+    // set_port_reuse(socket_fd);
+    // set_addr_reuse(socket_fd);
+    set_socket_flag(socket_fd, SO_REUSEPORT);
+
+    CHECK(pipe(pipe_fd));
 
     // /* ustawienie adresu i portu odbiorcy */
     // struct sockaddr_in remote_address;

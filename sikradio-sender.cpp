@@ -53,15 +53,9 @@ struct sockaddr_in get_send_address(const char *host, uint16_t port) {
 
 void* handle_control_port(void *arg) {
     int socket_fd = open_udp_socket();
-    set_port_reuse(socket_fd);
-
-    /* uaktywnienie rozgłaszania (ang. broadcast) */
-    int optval = 1;
-    CHECK_ERRNO(setsockopt(socket_fd, SOL_SOCKET, SO_BROADCAST, (void *) &optval, sizeof optval));
-
-    /* ustawienie TTL dla datagramów rozsyłanych do grupy */
-    optval = TTL_VALUE;
-    CHECK_ERRNO(setsockopt(socket_fd, IPPROTO_IP, IP_MULTICAST_TTL, (void *) &optval, sizeof optval));
+    set_socket_flag(socket_fd, SO_REUSEPORT);
+    set_socket_flag(socket_fd, SO_BROADCAST);
+    set_socket_flag(socket_fd, IP_MULTICAST_TTL, IPPROTO_IP);
 
     struct sockaddr_in addr;
     ControlData *control_data = (ControlData *) arg;
@@ -70,23 +64,14 @@ void* handle_control_port(void *arg) {
     std::string msg = "BOREWICZ_HERE " + std::string(control_data->mcast_addr) + " " + 
                       std::to_string(control_data->data_port) + " " + control_data->name + "\n";
 
-    std::cout << "length " << msg.length() << std::endl;
-
-    // // Bind the socket to a specific port
-    // memset(&addr, 0, sizeof(addr));
-    // addr.sin_family = AF_INET;
-    // addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    // addr.sin_port = htons(port);
-
     struct ip_mreq ip_mreq;
     ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-    // ip_mreq.imr_multiaddr = control_data->mcast_addr->sin_addr;
     if (inet_aton(control_data->mcast_addr, &ip_mreq.imr_multiaddr) == 0) {
         fatal("inet_aton - invalid multicast address\n");
     }
     CHECK_ERRNO(setsockopt(socket_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, (void *) &ip_mreq, sizeof ip_mreq));
 
-    bind_socket2(socket_fd, port);
+    bind_socket(socket_fd, port);
 
     while (true) {
         char *buffer = (char *) malloc(MAX_UDP_DATAGRAM_SIZE);

@@ -84,22 +84,22 @@ uint16_t read_port(char *string) {
     return (uint16_t) port;
 }
 
-int bind_socket(uint16_t port) {
-    int socket_fd = socket(AF_INET, SOCK_DGRAM, 0); // creating IPv4 UDP socket
-    ENSURE(socket_fd >= 0);
-    // after socket() call; we should close(sock) on any execution path;
+// int bind_socket(uint16_t port) {
+//     int socket_fd = socket(AF_INET, SOCK_DGRAM, 0); // creating IPv4 UDP socket
+//     ENSURE(socket_fd >= 0);
+//     // after socket() call; we should close(sock) on any execution path;
 
-    struct sockaddr_in server_address;
-    server_address.sin_family = AF_INET; // IPv4
-    server_address.sin_addr.s_addr = htonl(INADDR_ANY); // listening on all interfaces
-    server_address.sin_port = htons(port);
+//     struct sockaddr_in server_address;
+//     server_address.sin_family = AF_INET; // IPv4
+//     server_address.sin_addr.s_addr = htonl(INADDR_ANY); // listening on all interfaces
+//     server_address.sin_port = htons(port);
 
-    // bind the socket to a concrete address
-    CHECK_ERRNO(bind(socket_fd, (struct sockaddr *) &server_address,
-                        (socklen_t) sizeof(server_address)));
+//     // bind the socket to a concrete address
+//     CHECK_ERRNO(bind(socket_fd, (struct sockaddr *) &server_address,
+//                         (socklen_t) sizeof(server_address)));
 
-    return socket_fd;
-}
+//     return socket_fd;
+// }
 
 size_t read_message(int socket_fd, struct sockaddr_in *client_address, void *buffer, 
                     size_t max_length, const char *expected_src_addr) {
@@ -153,9 +153,14 @@ void send_message(int socket_fd, const struct sockaddr_in *send_address,
     }
 }
 
-inline static void set_port_reuse(int socket_fd) {
+// inline static void set_port_reuse(int socket_fd) {
+//     int option_value = 1;
+//     CHECK_ERRNO(setsockopt(socket_fd, SOL_SOCKET, SO_REUSEPORT, &option_value, sizeof(option_value)));
+// }
+
+inline static void set_socket_flag(int socket_fd, int flag, int level = SOL_SOCKET) {
     int option_value = 1;
-    CHECK_ERRNO(setsockopt(socket_fd, SOL_SOCKET, SO_REUSEPORT, &option_value, sizeof(option_value)));
+    CHECK_ERRNO(setsockopt(socket_fd, level, flag, &option_value, sizeof(option_value)));
 }
 
 inline static void set_addr_reuse(int socket_fd) {
@@ -172,7 +177,7 @@ inline static int open_udp_socket() {
     return socket_fd;
 }
 
-inline static void bind_socket2(int socket_fd, uint16_t port) {
+inline static void bind_socket(int socket_fd, uint16_t port) {
     struct sockaddr_in address;
     address.sin_family = AF_INET; // IPv4
     address.sin_addr.s_addr = htonl(INADDR_ANY); // listening on all interfaces
@@ -181,7 +186,6 @@ inline static void bind_socket2(int socket_fd, uint16_t port) {
     // bind the socket to a concrete address
     CHECK_ERRNO(bind(socket_fd, (struct sockaddr *) &address,
                      (socklen_t) sizeof(address)));
-
 }
 
 inline static int open_tcp_socket() {
@@ -211,6 +215,24 @@ inline static size_t receive_message(int socket_fd, void *buffer, size_t max_len
         PRINT_ERRNO();
     }
     return (size_t) received_length;
+}
+
+size_t recv_with_timeout(int socket_fd, void *buffer, size_t length, int flags, int timeout) {
+    fd_set read_set;
+    FD_ZERO(&read_set);
+    FD_SET(socket_fd, &read_set);
+
+    struct timeval tv;
+    tv.tv_sec = timeout;
+    tv.tv_usec = 0;
+
+    int retval = select(socket_fd + 1, &read_set, NULL, NULL, &tv);
+    if (retval == -1) {
+        PRINT_ERRNO();
+    } else if (retval == 0) {
+        return 0;
+    } 
+    return receive_message(socket_fd, buffer, length, flags);
 }
 
 #endif // UTILS_H
