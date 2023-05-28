@@ -15,6 +15,8 @@
 #include <arpa/inet.h>
 #include <string>
 #include <regex>
+#include <unistd.h>
+#include <atomic>
 
 #include "err.h"
 
@@ -41,11 +43,13 @@ struct LockedData {
   bool *received;
   bool started_printing;
   char *src_addr;
+  std::atomic<bool> selected;
 };
 
 struct RadioStation {
   std::string name;
-  const char *mcast_addr;
+//   const char mcast_addr;
+  std::string mcast_addr;
   uint16_t data_port;
 };
 
@@ -54,18 +58,19 @@ bool operator<(const struct RadioStation& a, const struct RadioStation& b) {
 }
 
 bool operator==(const struct RadioStation& a, const struct RadioStation& b) {
-  return a.name == b.name && strcmp(a.mcast_addr, b.mcast_addr) == 0 && a.data_port == b.data_port;
+//   return a.name == b.name && strcmp(a.mcast_addr, b.mcast_addr) == 0 && a.data_port == b.data_port;
+    return a.name == b.name && a.mcast_addr == b.mcast_addr && a.data_port == b.data_port;
 }
 
 uint64_t max(uint64_t a, uint64_t b) {
   return a > b ? a : b;
 }
 
-void locked_data_init(struct LockedData* ld, uint64_t bsize, uint64_t psize, 
+void locked_data_set(struct LockedData* ld, uint64_t bsize, uint64_t psize, 
                       uint64_t socket_fd, uint64_t session, uint64_t byte_zero, 
                       const char *src_addr) {
-  pthread_mutex_init(&ld->mutex, NULL);
-  pthread_cond_init(&ld->write, NULL);
+//   pthread_mutex_init(&ld->mutex, NULL);
+//   pthread_cond_init(&ld->write, NULL);
   ld->first_byte_in_buf = byte_zero;
   ld->byte_to_write = byte_zero;
   ld->last_byte_received = byte_zero;
@@ -76,9 +81,14 @@ void locked_data_init(struct LockedData* ld, uint64_t bsize, uint64_t psize,
   ld->received = static_cast<bool*>(std::calloc(ld->my_bsize / psize, sizeof(bool)));
   ld->socket_fd = socket_fd;
   ld->session = session;
-  ld->started_printing = false;
   ld->src_addr = static_cast<char*>(std::malloc(strlen(src_addr) + 1));
   strcpy(ld->src_addr, src_addr);
+}
+
+void locked_data_init(struct LockedData* ld) {
+    CHECK_ERRNO(pthread_mutex_init(&ld->mutex, NULL));
+    CHECK_ERRNO(pthread_cond_init(&ld->write, NULL));
+    ld->started_printing = false;
 }
 
 uint16_t read_port(char *string) {
@@ -147,6 +157,37 @@ size_t read_message(int socket_fd, struct sockaddr_in *client_address, void *buf
     }
     return (size_t) len;
 }
+
+size_t receive_music(int socket_fd, void *buffer, size_t max_length, int interrupt_dsc) {
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(socket_fd, &readfds);
+    FD_SET(interrupt_dsc, &readfds);
+
+    int maxfd = max(socket_fd, interrupt_dsc);
+
+    int activity = select(maxfd + 1, &readfds, NULL, NULL, NULL);
+
+    char *interrupt_buf = static_cast<char*>(std::malloc(1));
+
+    if (activity == -1) {
+        PRINT_ERRNO();
+    }
+
+    sockaddr_in client_address;
+
+    if (FD_ISSET(socket_fd, &readfds)) {
+        return read_message(socket_fd, &client_address, buffer, max_length, NULL);
+    }
+
+    if (FD_ISSET(interrupt_dsc, &readfds)) {
+        read(interrupt_dsc, interrupt_buf, 1);
+        return 0;
+    }
+
+    return 0;
+}
+
 
 void send_message(int socket_fd, const struct sockaddr_in *send_address, 
                   const char *data, uint64_t size) {
@@ -252,7 +293,7 @@ std::string receive_string(int socket_fd, size_t max_length, int flags = 0, stru
         received_length = read_message(socket_fd, client_address, buf, max_length, NULL);
     }
     std::string result(buf, received_length);
-    // free(buf);
+    free(buf);
     return result;
 }
 

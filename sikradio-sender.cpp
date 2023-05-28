@@ -56,20 +56,16 @@ struct sockaddr_in get_send_address(const char *host, uint16_t port) {
 void handle_control_port(uint16_t ctrl_port, const char *mcast_addr, uint16_t data_port, const char *name) {
     int socket_fd = open_udp_socket();
     set_socket_flag(socket_fd, SO_REUSEPORT);
+    set_socket_flag(socket_fd, SO_REUSEADDR);
     set_socket_flag(socket_fd, SO_BROADCAST);
     set_socket_flag(socket_fd, IP_MULTICAST_TTL, IPPROTO_IP);
 
     // struct sockaddr_in addr;
 
-    std::string msg = "BOREWICZ_HERE " + std::string(mcast_addr) + " " + 
+    std::string reply_msg = "BOREWICZ_HERE " + std::string(mcast_addr) + " " + 
                       std::to_string(data_port) + " " + name + "\n";
 
-    struct ip_mreq ip_mreq;
-    ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-    if (inet_aton(mcast_addr, &ip_mreq.imr_multiaddr) == 0) {
-        fatal("inet_aton - invalid multicast address\n");
-    }
-    CHECK_ERRNO(setsockopt(socket_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, (void *) &ip_mreq, sizeof ip_mreq));
+    
 
     bind_socket(socket_fd, ctrl_port);
 
@@ -80,9 +76,8 @@ void handle_control_port(uint16_t ctrl_port, const char *mcast_addr, uint16_t da
         
         std::string message = receive_string(socket_fd, MAX_UDP_DATAGRAM_SIZE, 0, &sender_addr);
 
-        std::cout << message;
         if (message == LOOKUP_MSG) {
-            send_message(socket_fd, &sender_addr, msg.c_str(), msg.length());
+            send_message(socket_fd, &sender_addr, reply_msg.c_str(), reply_msg.length());
         } else {
             // TODO: handle REXMIT
         }
@@ -151,10 +146,25 @@ int main(int argc, char* argv[]) {
 
     struct sockaddr_in send_address = get_send_address(mcast_addr, data_port);
 
-    int socket_fd = socket(PF_INET, SOCK_DGRAM, 0);
-    if (socket_fd < 0) {
-        PRINT_ERRNO();
+    // int socket_fd = socket(PF_INET, SOCK_DGRAM, 0);
+    // if (socket_fd < 0) {
+    //     PRINT_ERRNO();
+    // }
+
+    int socket_fd = open_udp_socket();
+    set_socket_flag(socket_fd, SO_BROADCAST);
+    set_socket_flag(socket_fd, IP_MULTICAST_TTL, IPPROTO_IP);
+    // set_socket_flag(socket_fd, SOL_IP, IP_MULTICAST_LOOP, 0);
+
+    /* podłączenie do grupy rozsyłania (ang. multicast) */
+    struct ip_mreq ip_mreq;
+    ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+    if (inet_aton(mcast_addr, &ip_mreq.imr_multiaddr) == 0) {
+        fatal("inet_aton - invalid multicast address\n");
     }
+
+    int option_value = 1;
+    CHECK_ERRNO(setsockopt(socket_fd, SOL_IP, IP_MULTICAST_LOOP, &option_value, sizeof(option_value)));
 
     char *queue = static_cast<char*>(std::malloc(fsize));
     free(queue);
@@ -169,6 +179,7 @@ int main(int argc, char* argv[]) {
     while(fread(packet + 2 * sizeof(uint64_t), 1, psize, stdin)) {
         first_byte_to_send = htobe64(first_byte_num);
         memcpy(packet + sizeof(uint64_t), &first_byte_to_send, sizeof(uint64_t));
+        std::cerr << "sending packet " << first_byte_num << "\n";
         send_message(socket_fd, &send_address, packet, psize + 16);
         first_byte_num += psize;
     }
