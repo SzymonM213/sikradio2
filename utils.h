@@ -14,10 +14,17 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <string>
+#include <regex>
 
 #include "err.h"
 
 #define MAX_UDP_DATAGRAM_SIZE 65507
+
+constexpr std::string_view LOOKUP_MSG = "ZERO_SEVEN_COME_IN\n";
+
+// constexpr std::string_view REPLY_MSG = "^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1,5})\\s([\\x20-\\x7F]{1,64})\\n$";
+
+std::regex REPLY_REGEX("^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1,5})\\s([\\x20-\\x7F]{1,64})\\n$");
 
 struct LockedData {
   pthread_mutex_t mutex;
@@ -233,6 +240,20 @@ size_t recv_with_timeout(int socket_fd, void *buffer, size_t length, int flags, 
         return 0;
     } 
     return receive_message(socket_fd, buffer, length, flags);
+}
+
+std::string receive_string(int socket_fd, size_t max_length, int flags = 0, struct sockaddr_in *client_address = NULL) {
+    char *buf = static_cast<char*>(malloc(MAX_UDP_DATAGRAM_SIZE));
+    size_t received_length;
+    if (client_address == NULL) {
+        received_length = receive_message(socket_fd, buf, max_length, flags);
+    }
+    else {
+        received_length = read_message(socket_fd, client_address, buf, max_length, NULL);
+    }
+    std::string result(buf, received_length);
+    // free(buf);
+    return result;
 }
 
 #endif // UTILS_H

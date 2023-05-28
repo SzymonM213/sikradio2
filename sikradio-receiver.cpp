@@ -83,7 +83,6 @@ void move_selected_station(bool up) {
 }
 
 void remove_station(std::map<RadioStation, uint64_t>::iterator station) {
-    // CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
     if (station == selected_station) {
         for (auto it = stations.begin(); it != stations.end(); it++) {
             if (it->first.name == fav_name) {
@@ -96,8 +95,6 @@ void remove_station(std::map<RadioStation, uint64_t>::iterator station) {
         printf("chuj2\n");
     }
     stations.erase(station);
-    printf("new station: ", selected_station->first.name.c_str());
-    // CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
 }
 
 void start_new_session(uint64_t session_id, uint64_t first_byte_num) {
@@ -281,6 +278,7 @@ void send_lookup(uint16_t port, const char *addr, int socket_fd) {
     // Send the broadcast message and update stations
     struct timeval tp;
     while (true) {
+        std::cout << message;
         if (sendto(socket_fd, message, strlen(message), 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0) {
             fatal("sendto() failed");
         }
@@ -300,7 +298,7 @@ void send_lookup(uint16_t port, const char *addr, int socket_fd) {
 }
 
 void receive_reply(int socket_fd) {
-    struct sockaddr_in sender_addr;
+    // struct sockaddr_in sender_addr;
     // int socket_fd = *(static_cast<int*>(arg));
     
     char *buf = static_cast<char*>(malloc(MAX_UDP_DATAGRAM_SIZE));
@@ -309,17 +307,16 @@ void receive_reply(int socket_fd) {
     struct timeval tp;
 
     // std::regex reply = std::regex("^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1, 5})\\s([\\x20-\\x7F]{1, 64})\\n$");
-    std::regex reply("^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1,5})\\s([\\x20-\\x7F]{1,64})\\n$");
+    // std::regex reply(REPLY_MSG);
 
     while (true) {
         // size_t len = read_message(socket_fd, &sender_addr, buf, MAX_UDP_DATAGRAM_SIZE, NULL);
         // size_t len = receive_message(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0);
-        size_t len = recv_with_timeout(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0, 1);
+        // size_t len = recv_with_timeout(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0, 1);
         // size_t len = recv(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0);
-        std::string message(buf, len);
-        // std::cout << message;
+        std::string message = receive_string(socket_fd, MAX_UDP_DATAGRAM_SIZE);
         std::smatch matches;
-        if (std::regex_match(message, matches, reply)) {
+        if (std::regex_match(message, matches, REPLY_REGEX)) {
             gettimeofday(&tp, NULL);
             uint64_t time = tp.tv_sec * 1000 + tp.tv_usec / 1000;
             // std::istringstream ss(message.substr(13));
@@ -334,15 +331,15 @@ void receive_reply(int socket_fd) {
                 continue;
             }
             RadioStation station = {name, mcast_addr.c_str(), (uint16_t) port};
-            std::cout << "Received: " << station.name << " " << station.mcast_addr << " " << station.data_port << "\n";
             CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
             if (stations.find(station) != stations.end()) {
                 stations[station] = time;
             }
             else {
                 stations.insert({station, time});
-                printf("nowy zjeb\n");
-                write(pipe_fd[1], "a", 1);
+                if(write(pipe_fd[1], "a", 1) < 0) {
+                    fatal("write() failed");
+                }
             }
             // stations[station] = time;
             if (stations.size() == 1) {
@@ -390,7 +387,6 @@ void handle_ui(uint16_t port) {
 
     // char buf[connections][buf_size];
     std::vector<char *> buf(connections);
-    const char* set_character_mode = "^]mode char\n";
 
     std::vector<ssize_t> buf_len(connections);
     std::vector<ssize_t> buf_pos(connections);
@@ -463,11 +459,19 @@ void handle_ui(uint16_t port) {
             }
             if (poll_descriptors[1].revents & POLLIN) {
                 ssize_t received_bytes = read(poll_descriptors[1].fd, buf[1], buf_size);
+                if (received_bytes != 1) {
+                    fatal("read() failed");
+                }
                 std::string msg = make_ui();
-                printf("nowe stacje\n");
                 for (int i = 2; i < connections; i++) {
                     if (poll_descriptors[i].fd != -1) {
-                        write(poll_descriptors[i].fd, msg.c_str(), msg.size());
+                        ssize_t sent_bytes = write(poll_descriptors[i].fd, msg.c_str(), msg.size());
+                        if (sent_bytes < 0) {
+                            fprintf(stderr, "Error when sending message to connection %d (errno %d, %s)\n", i, errno, strerror(errno));
+                            CHECK_ERRNO(close(poll_descriptors[i].fd));
+                            poll_descriptors[i].fd = -1;
+                            active_clients -= 1;
+                        }
                     }
                 }
             }
@@ -503,7 +507,13 @@ void handle_ui(uint16_t port) {
                 }
                 std::string msg = make_ui();
                 for (int j = 2; j < connections; j++) {
-                    write(poll_descriptors[j].fd, msg.c_str(), msg.size());
+                    if (poll_descriptors[j].fd != -1) {
+                        if(write(poll_descriptors[j].fd, msg.c_str(), msg.size()) < 0) {
+                            CHECK_ERRNO(close(poll_descriptors[j].fd));
+                            poll_descriptors[j].fd = -1;
+                            active_clients -= 1;
+                        }
+                    }
                 }
             }   
         }
@@ -514,7 +524,9 @@ void handle_ui(uint16_t port) {
             uint64_t time = tp.tv_sec * 1000 + tp.tv_usec / 1000;
             if (it->second + 20000 < time) {
                 remove_station(it++);
-                write(pipe_fd[1], "r", 1);
+                if(write(pipe_fd[1], "r", 1) < 0) {
+                    fatal("write() failed");
+                }
             } else {
                 it++;
             }
@@ -565,22 +577,8 @@ int main(int argc, char *argv[]) {
         fatal("Wrong buffer size");
     }
 
-    // struct ControlData *ctrl_data = static_cast<struct ControlData*>(std::malloc(sizeof(struct ControlData)));
-    // ctrl_data->addr = discover_addr;
-
     int socket_fd = open_udp_socket();
-
-    /* uaktywnienie rozgłaszania (ang. broadcast) */
-    // int optval = 1;
-    // CHECK_ERRNO(setsockopt(socket_fd, SOL_SOCKET, SO_BROADCAST, (void *) &optval, sizeof optval));
     set_socket_flag(socket_fd, SO_BROADCAST);
-
-    // /* ustawienie TTL dla datagramów rozsyłanych do grupy */
-    // optval = TTL_VALUE;
-    // CHECK_ERRNO(setsockopt(socket_fd, IPPROTO_IP, IP_MULTICAST_TTL, (void *) &optval, sizeof optval));
-
-    // set_port_reuse(socket_fd);
-    // set_addr_reuse(socket_fd);
     set_socket_flag(socket_fd, SO_REUSEPORT);
 
     CHECK(pipe(pipe_fd));
@@ -619,28 +617,29 @@ int main(int argc, char *argv[]) {
     std::thread send_lookup_thread(send_lookup, control_port, discover_addr, socket_fd);
     std::thread receive_reply_thread(receive_reply, socket_fd);
 
-    // char *receive_buf = static_cast<char*>(std::malloc(65536 + 16));
+    char *receive_buf = static_cast<char*>(std::malloc(65536 + 16));
 
-    // // int socket_fd = bind_socket(data_port);
-    // int socket_fd = open_udp_socket();
+    // int socket_fd = bind_socket(data_port);
+    int data_socket_fd = open_udp_socket();
     // set_port_reuse(socket_fd);
-    // // bind_socket2(socket_fd, data_port);
+    set_socket_flag(data_socket_fd, SO_REUSEPORT);
+    bind_socket(data_socket_fd, data_port);
 
-    // size_t psize;
-    // struct sockaddr_in client_address;
-    // psize = read_message(socket_fd, &client_address, receive_buf, 65535, src_addr) - 16;
-    // uint64_t session_id;
-    // uint64_t byte_zero;
-    // memcpy(&session_id, receive_buf, sizeof(uint64_t));
-    // memcpy(&byte_zero, receive_buf + sizeof(uint64_t), sizeof(uint64_t));
+    size_t psize;
+    struct sockaddr_in client_address;
+    psize = read_message(data_socket_fd, &client_address, receive_buf, 65535, src_addr) - 16;
+    uint64_t session_id;
+    uint64_t byte_zero;
+    memcpy(&session_id, receive_buf, sizeof(uint64_t));
+    memcpy(&byte_zero, receive_buf + sizeof(uint64_t), sizeof(uint64_t));
 
-    // session_id = be64toh(session_id);
-    // byte_zero = be64toh(byte_zero);
+    session_id = be64toh(session_id);
+    byte_zero = be64toh(byte_zero);
 
-    // ld = static_cast<struct LockedData*>(std::malloc(sizeof(struct LockedData)));
-    // locked_data_init(ld, bsize, psize, socket_fd, session_id, byte_zero, src_addr);
-    // memcpy(ld->data, receive_buf + 2 * sizeof(uint64_t), psize);
-    // ld->received[0] = true;
+    ld = static_cast<struct LockedData*>(std::malloc(sizeof(struct LockedData)));
+    locked_data_init(ld, bsize, psize, socket_fd, session_id, byte_zero, src_addr);
+    memcpy(ld->data, receive_buf + 2 * sizeof(uint64_t), psize);
+    ld->received[0] = true;
 
     // pthread_t writer_thread;
     // pthread_t reader_thread;

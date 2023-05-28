@@ -17,18 +17,19 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <time.h>
+#include <thread>
 
 #include "err.h"
 #include "utils.h"
 
 #define TTL_VALUE 4
 
-struct ControlData {
-    uint16_t port;
-    const char *mcast_addr;
-    uint16_t data_port;
-    const char *name;
-};
+// struct ControlData {
+//     uint16_t port;
+//     const char *mcast_addr;
+//     uint16_t data_port;
+//     const char *name;
+// };
 
 struct sockaddr_in get_send_address(const char *host, uint16_t port) {
     struct addrinfo hints;
@@ -51,42 +52,46 @@ struct sockaddr_in get_send_address(const char *host, uint16_t port) {
     return send_address;
 }
 
-void* handle_control_port(void *arg) {
+// ctrl_port, mcast_addr, data_port, name.c_str()
+void handle_control_port(uint16_t ctrl_port, const char *mcast_addr, uint16_t data_port, const char *name) {
     int socket_fd = open_udp_socket();
     set_socket_flag(socket_fd, SO_REUSEPORT);
     set_socket_flag(socket_fd, SO_BROADCAST);
     set_socket_flag(socket_fd, IP_MULTICAST_TTL, IPPROTO_IP);
 
-    struct sockaddr_in addr;
-    ControlData *control_data = (ControlData *) arg;
-    uint16_t port = control_data->port;
+    // struct sockaddr_in addr;
 
-    std::string msg = "BOREWICZ_HERE " + std::string(control_data->mcast_addr) + " " + 
-                      std::to_string(control_data->data_port) + " " + control_data->name + "\n";
+    std::string msg = "BOREWICZ_HERE " + std::string(mcast_addr) + " " + 
+                      std::to_string(data_port) + " " + name + "\n";
 
     struct ip_mreq ip_mreq;
     ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-    if (inet_aton(control_data->mcast_addr, &ip_mreq.imr_multiaddr) == 0) {
+    if (inet_aton(mcast_addr, &ip_mreq.imr_multiaddr) == 0) {
         fatal("inet_aton - invalid multicast address\n");
     }
     CHECK_ERRNO(setsockopt(socket_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, (void *) &ip_mreq, sizeof ip_mreq));
 
-    bind_socket(socket_fd, port);
+    bind_socket(socket_fd, ctrl_port);
 
     while (true) {
-        char *buffer = (char *) malloc(MAX_UDP_DATAGRAM_SIZE);
+        // char *buffer = (char *) malloc(MAX_UDP_DATAGRAM_SIZE);
         struct sockaddr_in sender_addr;
-        socklen_t sender_addr_len = sizeof(sender_addr);
-        size_t len = read_message(socket_fd, &sender_addr, buffer, MAX_UDP_DATAGRAM_SIZE, NULL);
+        // socklen_t sender_addr_len = sizeof(sender_addr);
         
-        if (strcmp(buffer, "ZERO_SEVEN_COME_IN\n") == 0) {
-            std::cout << "addr: " << inet_ntoa(sender_addr.sin_addr) << std::endl;
+        std::string message = receive_string(socket_fd, MAX_UDP_DATAGRAM_SIZE, 0, &sender_addr);
+
+        std::cout << message;
+        if (message == LOOKUP_MSG) {
             send_message(socket_fd, &sender_addr, msg.c_str(), msg.length());
-            std::cout << "Sent " << msg.length() << std::endl;
         } else {
             // TODO: handle REXMIT
         }
-        free(buffer);
+    }
+}
+
+void send_rexmit(int rtime) {
+    while (true) {
+        sleep(rtime / 1000);
     }
 }
 
@@ -137,10 +142,12 @@ int main(int argc, char* argv[]) {
         fatal("wrong name");
     }
 
-    struct ControlData control_data = {ctrl_port, mcast_addr, data_port, name.c_str()};
+    // struct ControlData control_data = {ctrl_port, mcast_addr, data_port, name.c_str()};
 
-    pthread_t control_thread;
-    pthread_create(&control_thread, NULL, handle_control_port, &control_data);
+    // pthread_t control_thread;
+    // pthread_create(&control_thread, NULL, handle_control_port, &control_data);
+    std::thread control_thread(handle_control_port, ctrl_port, mcast_addr, data_port, name.c_str());
+    std::thread rexmit_thread(send_rexmit, rtime);
 
     struct sockaddr_in send_address = get_send_address(mcast_addr, data_port);
 
@@ -148,6 +155,9 @@ int main(int argc, char* argv[]) {
     if (socket_fd < 0) {
         PRINT_ERRNO();
     }
+
+    char *queue = static_cast<char*>(std::malloc(fsize));
+    free(queue);
 
     uint64_t first_byte_num = 0;
     char *packet = static_cast<char*>(std::malloc(psize + 2 * sizeof(uint64_t)));
@@ -164,5 +174,6 @@ int main(int argc, char* argv[]) {
     }
     free(packet);
 
-    pthread_join(control_thread, NULL);
+    control_thread.join();
+    rexmit_thread.join();
 }
