@@ -158,7 +158,8 @@ void send_rexmit(size_t rtime, uint16_t control_port) {
                     rexmit_msg.pop_back();
                 }
                 rexmit_msg += "\n";
-                sendto(socket_fd, rexmit_msg.c_str(), rexmit_msg.size(), 0, (struct sockaddr *) &addr,  sizeof(addr));
+                sendto(socket_fd, rexmit_msg.c_str(), rexmit_msg.size(), 0, 
+                      (struct sockaddr *) &addr,  sizeof(addr));
                 to_rexmit.clear();
             }
         } else {
@@ -173,20 +174,22 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     int data_socket_fd = open_udp_socket();
     set_socket_flag(data_socket_fd, SO_REUSEPORT);
 
-    /* podłączenie do grupy rozsyłania (ang. multicast) */
+    /* join multicast group */
     struct ip_mreq ip_mreq;
     ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
     if (inet_aton(src_addr, &ip_mreq.imr_multiaddr) == 0) {
         fatal("inet_aton - invalid multicast address\n");
     }
 
-    CHECK_ERRNO(setsockopt(data_socket_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, (void *) &ip_mreq, sizeof ip_mreq));
+    CHECK_ERRNO(setsockopt(data_socket_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, 
+                           (void *) &ip_mreq, sizeof ip_mreq));
 
     bind_socket(data_socket_fd, data_port);
 
     ssize_t psize;
     struct sockaddr_in sender_addr;
-    psize = receive_or_interrupt(data_socket_fd, receive_buf, MAX_UDP_DATAGRAM_SIZE, reader_pipe_fd[0], &sender_addr) - 16;
+    psize = receive_or_interrupt(data_socket_fd, receive_buf, MAX_UDP_DATAGRAM_SIZE, 
+                                 reader_pipe_fd[0], &sender_addr) - 16;
     if (psize < 0) {
         ld->selected.store(false);
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
@@ -210,7 +213,8 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     uint64_t first_byte_num = 0;
     while(ld->selected) {
-        if (receive_or_interrupt(ld->socket_fd, receive_buf, ld->psize + 16, reader_pipe_fd[0]) < 0) {
+        if (receive_or_interrupt(ld->socket_fd, receive_buf, ld->psize + 16, 
+                                 reader_pipe_fd[0]) < 0) {
             break;
         }
         memcpy(&session_id, receive_buf, sizeof(uint64_t));
@@ -225,7 +229,6 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
         for (size_t i = 0; i < ld->my_bsize / ld->psize; i++) {
             sum += ld->received[i];
         }
-        std::cerr << "SUM: " << sum << std::endl;
 
         if (session_id > ld->session) {
             start_new_session(session_id, first_byte_num);
@@ -252,7 +255,6 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
                     ld->first_byte_in_buf += ld->my_bsize;
                     assert(first_byte_num >= ld->first_byte_in_buf);
                     assert(first_byte_num - ld->first_byte_in_buf < ld->my_bsize);
-                    std::cerr << "ZERUJEMY KURWA1\n";
                     for (uint64_t i = ld->first_byte_in_buf; i < first_byte_num; i += ld->psize) {
                         ld->received[(i - ld->first_byte_in_buf) / ld->psize] = 0;
                     }
@@ -276,12 +278,10 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
             }
         }
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
-        // usleep(100);
     }
     ld->selected.store(false);
     CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
     pthread_cond_signal(&ld->write);
-    std::cerr << "chuj6, " << ld->last_byte_received - ld->byte_to_write << std::endl;
     CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     CHECK_ERRNO(close(ld->socket_fd));
 }
@@ -295,7 +295,6 @@ void writer_main() {
         while (!ld->started_printing || ld->byte_to_write > ld->last_byte_received) {
             pthread_cond_wait(&ld->write, &ld->mutex);
             if (!ld->selected) {
-                std::cerr << "chuj7, " << ld->last_byte_received - ld->byte_to_write << std::endl;
                 CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
                 return;
             }
@@ -318,7 +317,7 @@ void writer_main() {
             index_to_write = ld->byte_to_write - ld->first_byte_in_buf;
         }
         assert(index_to_write % ld->psize == 0);
-        // if the packet wasn't received yet, print 0s
+
         assert(index_to_write < ld->my_bsize);
         if (!ld->received[index_to_write / ld->psize]) {;
             for (uint64_t i = 0; i < ld->psize; i++) {
@@ -335,8 +334,6 @@ void writer_main() {
         assert(ld->byte_to_write <= ld->last_byte_received);
         ld->byte_to_write += ld->psize;
 
-
-        std::cerr << "chuj8, " << ld->last_byte_received << " " << ld->byte_to_write << std::endl;
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
         usleep(100);
         fwrite(buf_to_print, 1, ld->psize, stdout);
@@ -347,7 +344,6 @@ void send_lookup(uint16_t port, const char *addr, int socket_fd) {
     const char *message = "ZERO_SEVEN_COME_IN\n";
     int broadcast_permission = 1;
 
-    // Set socket options to allow broadcast
     if (setsockopt(socket_fd, SOL_SOCKET, SO_BROADCAST, (void *)&broadcast_permission,
                    sizeof(broadcast_permission)) < 0) {
         fatal("setsockopt() failed");
@@ -359,15 +355,13 @@ void send_lookup(uint16_t port, const char *addr, int socket_fd) {
     dest_addr.sin_family = AF_INET;
     dest_addr.sin_port = htons(port);
 
-    if (inet_aton(addr, &dest_addr.sin_addr) == 0) {
-        fatal("invalid discovery address");
-    }
-    dest_addr.sin_port = htons(port);
+    dest_addr.sin_addr.s_addr = inet_addr(addr);
 
     // Send the broadcast message and update stations
     struct timeval tp;
     while (true) {
-        if (sendto(socket_fd, message, strlen(message), 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0) {
+        if (sendto(socket_fd, message, strlen(message), 0, (struct sockaddr *) &dest_addr, 
+                   sizeof(dest_addr)) < 0) {
             fatal("sendto() failed");
         }
         CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
@@ -478,7 +472,7 @@ void handle_ui(uint16_t port) {
             if (poll_descriptors[0].revents & POLLIN) {
                 int client_fd = accept_connection(poll_descriptors[0].fd, NULL);
 
-                CHECK_ERRNO(fcntl(client_fd, F_SETFL, O_NONBLOCK)); /* tryb nieblokujący */
+                CHECK_ERRNO(fcntl(client_fd, F_SETFL, O_NONBLOCK)); /* non-blocking */
 
                 bool accepted = false;
                 int client_id;
@@ -496,7 +490,6 @@ void handle_ui(uint16_t port) {
                     poll_descriptors.push_back(pollfd());
                     poll_descriptors[connections].fd = client_fd;
                     poll_descriptors[connections].events = POLLIN;
-                    // buf[connections] = static_cast<char*>(malloc(buf_size));
                     buf.push_back(static_cast<char*>(malloc(buf_size)));
                     buf_len.push_back(0);
                     buf_pos.push_back(0);
@@ -643,7 +636,8 @@ int main(int argc, char *argv[]) {
     CHECK(pipe(reader_pipe_fd));
 
     std::thread ui_thread(handle_ui, ui_port);
-    std::thread send_lookup_thread(send_lookup, control_port, discover_addr, socket_fd);
+    std::thread send_lookup_thread(send_lookup, control_port, 
+                                   discover_addr, socket_fd);
     std::thread receive_reply_thread(receive_reply, socket_fd);
 
     ld = static_cast<LockedData*>(malloc(sizeof(LockedData)));
@@ -657,7 +651,8 @@ int main(int argc, char *argv[]) {
         }
         ld->started_printing = false;
         ld->selected = true;
-        std::thread reader_thread(reader_main, selected_station->first.mcast_addr.c_str(), selected_station->first.data_port, bsize);
+        std::thread reader_thread(reader_main, selected_station->first.mcast_addr.c_str(), 
+                                  selected_station->first.data_port, bsize);
         std::thread writer_thread(writer_main);
         CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
         writer_thread.join();

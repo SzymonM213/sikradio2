@@ -1,5 +1,3 @@
-// #define _GNU_SOURCE
-
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -13,7 +11,6 @@
 #include <netdb.h>
 #include <stdint.h>
 #include <stdlib.h>
-// #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <time.h>
@@ -23,15 +20,6 @@
 
 #include "err.h"
 #include "utils.h"
-
-#define TTL_VALUE 4
-
-// struct ControlData {
-//     uint16_t port;
-//     const char *mcast_addr;
-//     uint16_t data_port;
-//     const char *name;
-// };
 
 pthread_mutex_t rexmit_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -63,7 +51,7 @@ struct sockaddr_in get_send_address(const char *host, uint16_t port) {
     struct sockaddr_in send_address;
     send_address.sin_family = AF_INET; // IPv4
     send_address.sin_addr.s_addr =
-            ((struct sockaddr_in *) (address_result->ai_addr))->sin_addr.s_addr; // IP address
+            ((struct sockaddr_in *) (address_result->ai_addr))->sin_addr.s_addr;
     send_address.sin_port = htons(port); // port from the command line
 
     freeaddrinfo(address_result);
@@ -71,7 +59,6 @@ struct sockaddr_in get_send_address(const char *host, uint16_t port) {
     return send_address;
 }
 
-// ctrl_port, mcast_addr, data_port, name.c_str()
 void handle_control_port(uint16_t ctrl_port, const char *mcast_addr, 
                          uint16_t data_port, const char *name) {
     int socket_fd = open_udp_socket();
@@ -79,8 +66,6 @@ void handle_control_port(uint16_t ctrl_port, const char *mcast_addr,
     set_socket_flag(socket_fd, SO_REUSEADDR);
     set_socket_flag(socket_fd, SO_BROADCAST);
     set_socket_flag(socket_fd, IP_MULTICAST_TTL, IPPROTO_IP);
-
-    // struct sockaddr_in addr;
 
     std::string reply_msg = "BOREWICZ_HERE " + std::string(mcast_addr) + " " + 
                       std::to_string(data_port) + " " + name + "\n";
@@ -90,14 +75,11 @@ void handle_control_port(uint16_t ctrl_port, const char *mcast_addr,
 
     while (!ended) {
         struct sockaddr_in sender_addr;
-        
-        // std::string message = receive_string(socket_fd, MAX_UDP_DATAGRAM_SIZE, 0, &sender_addr);
         char *buffer = (char *) malloc(MAX_UDP_DATAGRAM_SIZE);
         if (receive_or_interrupt(socket_fd, buffer, MAX_UDP_DATAGRAM_SIZE, pipe_end[0], &sender_addr) < 0) {
             free(buffer);
             break;
         }
-        // std::cerr << "Received message: " << buffer;
         std::string message(buffer);
 
         if (message == LOOKUP_MSG) {
@@ -202,16 +184,15 @@ int main(int argc, char* argv[]) {
 
     CHECK(pipe(pipe_end));
 
-    std::thread control_thread(handle_control_port, ctrl_port, mcast_addr, data_port, name.c_str());
+    std::thread control_thread(handle_control_port, ctrl_port, mcast_addr, 
+                               data_port, name.c_str());
 
     send_address = get_send_address(mcast_addr, data_port);
 
     int socket_fd = open_udp_socket();
     set_socket_flag(socket_fd, SO_BROADCAST);
-    set_socket_flag(socket_fd, IP_MULTICAST_TTL, IPPROTO_IP);
-    // set_socket_flag(socket_fd, SOL_IP, IP_MULTICAST_LOOP, 0);
 
-    /* podłączenie do grupy rozsyłania (ang. multicast) */
+    /* join to multicast group */
     struct ip_mreq ip_mreq;
     ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
     if (inet_aton(mcast_addr, &ip_mreq.imr_multiaddr) == 0) {
@@ -219,7 +200,8 @@ int main(int argc, char* argv[]) {
     }
 
     int option_value = 1;
-    CHECK_ERRNO(setsockopt(socket_fd, SOL_IP, IP_MULTICAST_LOOP, &option_value, sizeof(option_value)));
+    CHECK_ERRNO(setsockopt(socket_fd, SOL_IP, IP_MULTICAST_LOOP, &option_value,
+                sizeof(option_value)));
 
     std::thread rexmit_thread(send_rexmit, rtime, socket_fd);
 
@@ -233,7 +215,6 @@ int main(int argc, char* argv[]) {
     while(fread(packet + 2 * sizeof(uint64_t), 1, psize, stdin)) {
         first_byte_to_send = htobe64(first_byte_num);
         memcpy(packet + sizeof(uint64_t), &first_byte_to_send, sizeof(uint64_t));
-        // if (first_byte_num / psize % 50 != 0) send_message(socket_fd, &send_address, packet, psize + 16);
         send_message(socket_fd, &send_address, packet, psize + 16);
 
         CHECK_ERRNO(pthread_mutex_lock(&queue_mutex));
@@ -248,6 +229,7 @@ int main(int argc, char* argv[]) {
         first_byte_num += psize;
     }
     free(packet);
+
     if(write(pipe_end[1], "x", 1) < 0) {
         fatal("write");
     }

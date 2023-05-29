@@ -7,7 +7,6 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
-// #include <string.h>
 #include <endian.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -26,10 +25,7 @@
 constexpr std::string_view LOOKUP_MSG = "ZERO_SEVEN_COME_IN\n";
 constexpr std::string_view REXMIT_MSG = "LOUDER_PLEASE";
 
-// constexpr std::string_view REPLY_MSG = "^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1,5})\\s([\\x20-\\x7F]{1,64})\\n$";
-
 std::regex REPLY_REGEX("^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1,5})\\s([\\x20-\\x7F]{1,64})\\n$");
-// std::regex REXMIT_REGEX("^LOUDER_PLEASE (\\d+(?:,\\d+)*)\\n$");
 
 struct LockedData {
   pthread_mutex_t mutex;
@@ -222,7 +218,8 @@ inline static int accept_connection(int socket_fd, struct sockaddr_in *client_ad
     return client_fd;
 }
 
-std::string receive_string(int socket_fd, size_t max_length, int flags = 0, struct sockaddr_in *client_address = NULL) {
+std::string receive_string(int socket_fd, size_t max_length, int flags = 0, 
+                           struct sockaddr_in *client_address = NULL) {
     char *buf = static_cast<char*>(malloc(MAX_UDP_DATAGRAM_SIZE));
     size_t received_length;
     if (client_address == NULL) {

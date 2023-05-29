@@ -1,5 +1,5 @@
 CC = g++
-CFLAGS = -Wall -Wextra -lpthread -O2 -std=gnu++17 -g
+CFLAGS = -Wall -Wextra -O2 -std=gnu++17 -pthread
 .PHONY: all clean sikradio-receiver sikradio-sender send receive
 
 all: sikradio-receiver sikradio-sender
