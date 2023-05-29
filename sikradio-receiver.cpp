@@ -36,14 +36,12 @@ int pipe_fd[2];
 int reader_pipe_fd[2];
 
 constexpr std::string_view UI_HEADER =
-"------------------------------------------------------------------------\n\r"
-"\n\r"
+"------------------------------------------------------------------------\n\r\n\r"
 "SIK Radio\n\r"
-"\n\r"
-"------------------------------------------------------------------------\n\r";
+"------------------------------------------------------------------------\n\r\n\r";
 
 constexpr std::string_view UI_FOOTER =
-"------------------------------------------------------------------------\n\r";
+"------------------------------------------------------------------------\n\r\n\r";
 
 struct ControlData {
     uint16_t port;
@@ -86,8 +84,9 @@ void move_selected_station(bool up) {
     for (auto it = stations.begin(); it != stations.end(); it++) {
         std::cerr << it->first.name << " " << it->first.mcast_addr << " " << it->first.data_port << "\n";
     }
-    write(pipe_fd[1], "1", 1);
-    write(reader_pipe_fd[1], "1", 1);
+    if(write(pipe_fd[1], "1", 1) < 0 || write(reader_pipe_fd[1], "1", 1) < 0) {
+        fatal("write");
+    }
     ld->selected = false;
 }
 
@@ -100,7 +99,9 @@ void remove_station(std::map<RadioStation, uint64_t>::iterator station) {
             }
         }
         // printf("chuj1\n");
+        CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
         move_selected_station(false);
+        CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
         // printf("chuj2\n");
     }
     stations.erase(station);
@@ -170,9 +171,11 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     bind_socket(data_socket_fd, data_port);
 
     size_t psize;
-    struct sockaddr_in client_address;
+    // struct sockaddr_in client_address;
     // psize = read_message(data_socket_fd, &client_address, receive_buf, 65535, NULL) - 16;
+    std::cerr << "chuj\n";
     psize = receive_music(data_socket_fd, receive_buf, 65535, reader_pipe_fd[1]) - 16;
+    std::cerr << "chuj2\n";
     if (psize == 0) {
         return;
     }
@@ -198,12 +201,12 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     // CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
     while(ld->selected) {
         // CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
-        // printf("chuj\n");
+        std::cerr << "chuj\n";
         // ld->psize = read_message(ld->socket_fd, &client_address, receive_buf, 
         //                          ld->psize + 16, NULL) - 16;
         ld->psize = receive_music(ld->socket_fd, receive_buf, 
                                   ld->psize + 16, reader_pipe_fd[1]) - 16;
-        // printf("chuj2\n");
+        std::cerr << "chuj2\n";
         if (ld->psize == 0) {
             break;
         }
@@ -456,7 +459,7 @@ std::string make_ui() {
         if (it == selected_station) {
             result += " > ";
         }
-        result += it->first.name + "\n\r";
+        result += it->first.name + "\n\r\n\r";
     }
     CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
     result += UI_FOOTER;
@@ -731,7 +734,7 @@ int main(int argc, char *argv[]) {
         std::thread writer_thread(writer_main);
         // std::thread reader_thread(reader_main, "239.10.11.12", data_port, bsize);
         // std::cerr << strcmp(selected_station->first.mcast_addr, "239.10.11.12") << " " << selected_station->first.data_port << "\n";
-        std::thread reader_thread(reader_main, selected_station->first.mcast_addr, selected_station->first.data_port, bsize);
+        std::thread reader_thread(reader_main, selected_station->first.mcast_addr.c_str(), selected_station->first.data_port, bsize);
         std::cerr << "WYPUŚCIŁEM " << selected_station->first.name << " " << selected_station->first.mcast_addr << " " << selected_station->first.data_port << "\n";
         //iterate over stations
         for (auto it = stations.begin(); it != stations.end(); it++) {

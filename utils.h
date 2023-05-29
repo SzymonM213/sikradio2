@@ -94,7 +94,7 @@ void locked_data_init(struct LockedData* ld) {
 uint16_t read_port(char *string) {
     unsigned long port = strtoul(string, NULL, 10);
     PRINT_ERRNO();
-    if (port > UINT16_MAX) {
+    if (port > UINT16_MAX || port == 0) {
         fatal("%u is not a valid port number", port);
     }
 
@@ -181,7 +181,10 @@ size_t receive_music(int socket_fd, void *buffer, size_t max_length, int interru
     }
 
     if (FD_ISSET(interrupt_dsc, &readfds)) {
-        read(interrupt_dsc, interrupt_buf, 1);
+        ssize_t received_bytes = read(interrupt_dsc, interrupt_buf, 1);
+        if (received_bytes < 0) {
+            PRINT_ERRNO();
+        }
         return 0;
     }
 
@@ -295,6 +298,37 @@ std::string receive_string(int socket_fd, size_t max_length, int flags = 0, stru
     std::string result(buf, received_length);
     free(buf);
     return result;
+}
+
+bool is_valid_mcast(const char* address) {
+    struct in_addr addr;
+    if (inet_pton(AF_INET, address, &addr) <= 0) {
+        printf("Invalid address\n");
+        return 0;
+    }
+
+    unsigned char firstByte = addr.s_addr & 0xFF;
+    // Multicast addresses have the high-order bit of the first byte set to 1
+    if ((firstByte & 0x80) == 0x80) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+bool is_valid_addr(const std::string &addr) {
+    struct sockaddr_in sa;
+    int result = inet_pton(AF_INET, addr.c_str(), &(sa.sin_addr));
+    return result != 0;
+}
+
+bool is_valid_port(const std::string &port) {
+    int port_num = std::stoi(port);
+    return port_num > 0 && port_num < 65536;
+}
+
+bool is_valid_psize(size_t &psize) {
+    return psize > 0 && psize < 65536;
 }
 
 #endif // UTILS_H

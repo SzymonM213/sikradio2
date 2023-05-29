@@ -100,7 +100,7 @@ int main(int argc, char* argv[]) {
     size_t rtime = 250;
     std::string name = "Nienazwany Nadajnik";
     int flag;
-    while((flag = getopt(argc, argv, "a:P:p:n:")) != -1) {
+    while((flag = getopt(argc, argv, "a:P:p:n:f:R:C:")) != -1) {
         switch(flag) {
         case 'a':
             mcast_addr = optarg;
@@ -127,13 +127,16 @@ int main(int argc, char* argv[]) {
             fatal("Unknown argument");
         }
     }
-    if(mcast_addr == NULL) {
-        fatal("No multicast address given");
+    if (!mcast_addr || !is_valid_mcast(mcast_addr)) {
+        fatal("Invalid multicast address");
     }
     if (psize < 1 || psize > 65535 - 16) {
         fatal("Wrong psize");
     }
-    if (name.length() == 0) {
+    if (fsize == 0) {
+        fatal("Wrong fsize");
+    }
+    if (name.length() == 0 || name.length() >= 64) {
         fatal("wrong name");
     }
 
