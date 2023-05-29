@@ -85,9 +85,8 @@ void handle_control_port(uint16_t ctrl_port, const char *mcast_addr,
     std::string reply_msg = "BOREWICZ_HERE " + std::string(mcast_addr) + " " + 
                       std::to_string(data_port) + " " + name + "\n";
 
-    
-
     bind_socket(socket_fd, ctrl_port);
+
 
     while (!ended) {
         struct sockaddr_in sender_addr;
@@ -102,7 +101,7 @@ void handle_control_port(uint16_t ctrl_port, const char *mcast_addr,
         }
         // std::cerr << "Received message: " << buffer;
         std::string message(buffer);
-
+        std::cerr << "Received message: " << message;
 
         if (message == LOOKUP_MSG) {
             send_message(socket_fd, &sender_addr, reply_msg.c_str(), reply_msg.length());
@@ -126,6 +125,7 @@ void send_rexmit(int rtime, int socket_fd) {
         CHECK_ERRNO(pthread_mutex_lock(&queue_mutex));
         for (size_t i : rexmit_list) {
             if (queue.find(i) != queue.end()) {
+                std::cerr << "Sending rexmit for " << i << std::endl;
                 send_message(socket_fd, &send_address, queue[i], 2 * sizeof(uint64_t) + psize);
             }
         }

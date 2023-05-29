@@ -146,12 +146,12 @@ size_t find_waiting_time() {
 //     }
 // }
 
-void send_rexmit(size_t rtime) {
+void send_rexmit(size_t rtime, uint16_t control_port) {
     std::vector<uint64_t> to_rexmit;
 
     int socket_fd = open_udp_socket();
-    set_socket_flag(socket_fd, SO_BROADCAST);
-    set_socket_flag(socket_fd, SO_REUSEPORT);
+    // set_socket_flag(socket_fd, SO_BROADCAST);
+    // set_socket_flag(socket_fd, SO_REUSEPORT);
 
     struct sockaddr_in addr;
 
@@ -160,7 +160,6 @@ void send_rexmit(size_t rtime) {
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
         if (ld->selected && ld->set_data) {
             std::cerr << "TO WRITE: " << ld->byte_to_write << " LAST BYTE: " << ld->last_byte_received << std::endl;
-
             size_t sum = 0;
             for (size_t i = 0; i < ld->my_bsize / ld->psize; i++) {
                 sum += ld->received[i];
@@ -168,7 +167,6 @@ void send_rexmit(size_t rtime) {
             std::cerr << "SUMchuj: " << sum << std::endl;
 
             for (uint64_t i = ld->byte_to_write; i < ld->last_byte_received; i += ld->psize) {
-                std::cerr << "CHUUUUUUUUUUUUUUUUUUJ" << std::endl;
                 i = i % ld->my_bsize + ld->first_byte_in_buf;
                 assert(i - ld->first_byte_in_buf < ld->my_bsize);
                 std::cerr << "i: " << i << " last_byte_received: " << ld->last_byte_received << std::endl;
@@ -177,7 +175,9 @@ void send_rexmit(size_t rtime) {
                     to_rexmit.push_back(i);
                 }
             }
+
             addr = ld->station_address;
+            addr.sin_port = htons(control_port);
 
             // std::cerr << "chuj, " << ld->last_byte_received - ld->byte_to_write << std::endl;
 
@@ -192,7 +192,7 @@ void send_rexmit(size_t rtime) {
                     rexmit_msg.pop_back();
                 }
                 rexmit_msg += "\n";
-                std::cerr << "sending remix\n";
+                std::cerr << "sending remix " << rexmit_msg;
                 sendto(socket_fd, rexmit_msg.c_str(), rexmit_msg.size(), 0, (struct sockaddr *) &addr,  sizeof(addr));
                 to_rexmit.clear();
             }
@@ -273,8 +273,6 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
             ld->last_byte_received = max(ld->last_byte_received, first_byte_num);
             // std::cerr << "last_byte_received: " << ld->last_byte_received << "first_byte_in_buf: " << ld->first_byte_in_buf << "my_bsize: " << ld->my_bsize << "\n";
             
-            assert(ld->byte_to_write <= ld->last_byte_received); //WYKURWIĆ TO
-            
             if (first_byte_num >= ld->first_byte_in_buf + 3 * ld->my_bsize / 4) {
                 ld->started_printing = true;
                 pthread_cond_signal(&ld->write);
@@ -306,8 +304,6 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
             if (first_byte_num == ld->byte_to_write + ld->bsize) {
                 ld->byte_to_write += ld->psize;
             }
-
-            assert(ld->byte_to_write <= ld->last_byte_received); //WYKURWIĆ TO
         
             // copy music data to buffer
             assert(first_byte_num >= ld->first_byte_in_buf);
@@ -322,6 +318,7 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
         }
         std::cerr << "chuj5, " << ld->last_byte_received - ld->byte_to_write << std::endl;
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
+        // usleep(100);
     }
     ld->selected.store(false);
     CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
@@ -386,6 +383,7 @@ void writer_main() {
 
         std::cerr << "chuj8, " << ld->last_byte_received << " " << ld->byte_to_write << std::endl;
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
+        usleep(100);
         fwrite(buf_to_print, 1, ld->psize, stdout);
         // for (size_t i = 0; i < ld->psize; i++) {
         //     printf("%c", buf_to_print[i]);
@@ -762,7 +760,7 @@ int main(int argc, char *argv[]) {
 
     ld = static_cast<LockedData*>(malloc(sizeof(LockedData)));
     locked_data_init(ld);
-    std::thread rexmit_thread(send_rexmit, rtime);
+    std::thread rexmit_thread(send_rexmit, rtime, control_port);
 
     while (true) {
         std::cerr << "mainlock\n";

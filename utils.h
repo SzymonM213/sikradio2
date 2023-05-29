@@ -87,6 +87,8 @@ void locked_data_set(struct LockedData* ld, uint64_t bsize, uint64_t psize,
   ld->socket_fd = socket_fd;
   ld->session = session;
   ld->station_address = station_address;
+  char str[INET_ADDRSTRLEN];
+  inet_ntop(AF_INET, &(station_address.sin_addr), str, INET_ADDRSTRLEN);
   ld->set_data = true;
 }
 
@@ -370,7 +372,6 @@ bool is_valid_name(const std::string &name) {
 
 bool is_valid_number(const std::string &number) {
     for (char c : number.substr(0, number.size())) {
-        std::cerr << c << std::endl;
         if (!isdigit(c) && c != '\n') {
             return 0;
         }

@@ -8,7 +8,7 @@ sikradio-sender sikradio-receiver remix:
 	$(CC) $(CFLAGS) $@.cpp err.h utils.h -o $@
 
 popek:
-	sox -S "popek.mp3" -r 44100 -b 16 -e signed-integer -c 2 -t raw - | pv -q -L 176400 | ./sikradio-sender -a 239.10.11.12 -P 2137 -n popek
+	sox -S "popek.mp3" -r 44100 -b 16 -e signed-integer -c 2 -t raw - 2>/dev/null | pv -q -L 176400 | ./sikradio-sender -a 239.10.11.12 -P 2137 -n popek
 
 foczki:
 	sox -S "foczki.mp3" -r 44100 -b 16 -e signed-integer -c 2 -t raw - | pv -q -L 176400 | ./sikradio-sender -a 239.10.11.13 -n foczki
