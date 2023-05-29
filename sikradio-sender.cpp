@@ -13,7 +13,7 @@
 #include <netdb.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
+// #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <time.h>
@@ -30,6 +30,8 @@
 //     uint16_t data_port;
 //     const char *name;
 // };
+
+int pipe_end[2];
 
 struct sockaddr_in get_send_address(const char *host, uint16_t port) {
     struct addrinfo hints;
@@ -70,11 +72,19 @@ void handle_control_port(uint16_t ctrl_port, const char *mcast_addr, uint16_t da
     bind_socket(socket_fd, ctrl_port);
 
     while (true) {
-        // char *buffer = (char *) malloc(MAX_UDP_DATAGRAM_SIZE);
         struct sockaddr_in sender_addr;
         // socklen_t sender_addr_len = sizeof(sender_addr);
         
-        std::string message = receive_string(socket_fd, MAX_UDP_DATAGRAM_SIZE, 0, &sender_addr);
+        std::cerr << "Waiting for message" << std::endl;
+        // std::string message = receive_string(socket_fd, MAX_UDP_DATAGRAM_SIZE, 0, &sender_addr);
+        char *buffer = (char *) malloc(MAX_UDP_DATAGRAM_SIZE);
+        if (receive_or_interrupt(socket_fd, buffer, MAX_UDP_DATAGRAM_SIZE, pipe_end[0], &sender_addr) < 0) {
+            free(buffer);
+            break;
+        }
+        std::cerr << "Received message: " << buffer << std::endl;
+        std::string message(buffer);
+
 
         if (message == LOOKUP_MSG) {
             send_message(socket_fd, &sender_addr, reply_msg.c_str(), reply_msg.length());
@@ -85,9 +95,7 @@ void handle_control_port(uint16_t ctrl_port, const char *mcast_addr, uint16_t da
 }
 
 void send_rexmit(int rtime) {
-    while (true) {
-        sleep(rtime / 1000);
-    }
+    sleep(rtime / 100000);
 }
 
 int main(int argc, char* argv[]) {
@@ -140,6 +148,8 @@ int main(int argc, char* argv[]) {
         fatal("wrong name");
     }
 
+    CHECK(pipe(pipe_end));
+
     // struct ControlData control_data = {ctrl_port, mcast_addr, data_port, name.c_str()};
 
     // pthread_t control_thread;
@@ -187,6 +197,9 @@ int main(int argc, char* argv[]) {
         first_byte_num += psize;
     }
     free(packet);
+    if(write(pipe_end[1], "x", 1) < 0) {
+        fatal("write");
+    }
 
     control_thread.join();
     rexmit_thread.join();

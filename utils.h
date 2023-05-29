@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+// #include <string.h>
 #include <endian.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -17,6 +17,7 @@
 #include <regex>
 #include <unistd.h>
 #include <atomic>
+#include <iostream>
 
 #include "err.h"
 
@@ -76,6 +77,8 @@ void locked_data_set(struct LockedData* ld, uint64_t bsize, uint64_t psize,
   ld->last_byte_received = byte_zero;
   ld->psize = psize;
   ld->bsize = bsize;
+  std::cerr << "bsize: " << bsize << std::endl;
+  std::cerr << "psize: " << psize << std::endl;
   ld->my_bsize = bsize - bsize % psize; // real bsize for current session
   ld->data = static_cast<char*>(std::malloc(ld->bsize));
   ld->received = static_cast<bool*>(std::calloc(ld->my_bsize / psize, sizeof(bool)));
@@ -185,6 +188,9 @@ inline static size_t receive_message_from(int socket_fd, void *buffer, size_t ma
 // return -1 if interrupted
 ssize_t receive_or_interrupt(int socket_fd, void *buffer, size_t max_length, int interrupt_dsc, 
                             struct sockaddr_in *client_address = NULL) {
+
+    std::cerr << "interrupt_dsc: " << interrupt_dsc << "\n";
+
     fd_set readfds;
     FD_ZERO(&readfds);
     FD_SET(socket_fd, &readfds);
@@ -195,19 +201,14 @@ ssize_t receive_or_interrupt(int socket_fd, void *buffer, size_t max_length, int
     int activity = select(maxfd + 1, &readfds, NULL, NULL, NULL);
 
     char *interrupt_buf = static_cast<char*>(std::malloc(1));
-
     if (activity == -1) {
         PRINT_ERRNO();
     }
 
     if (FD_ISSET(socket_fd, &readfds)) {
         if (client_address != NULL) {
-            // return read_message(socket_fd, client_address, buffer, max_length, NULL);
-            // return recv(socket_fd, buffer, max_length, 0);
             return receive_message_from(socket_fd, buffer, max_length, 0, client_address);
         } else {
-            // struct sockaddr_in client_address;
-            // return read_message(socket_fd, &client_address, buffer, max_length, NULL);
             return receive_message(socket_fd, buffer, max_length, 0);
         }
     }

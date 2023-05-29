@@ -17,7 +17,7 @@ pudzian:
 	sox -S "pudzian.mp3" -r 44100 -b 16 -e signed-integer -c 2 -t raw - | pv -q -L 176400 | ./sikradio-sender -a 239.10.11.14 -n pudzian
 
 receive:
-	./sikradio-receiver -b 30000 2>chuj.txt | play -t raw -c 2 -r 44100 -b 16 -e signed-integer --buffer 32768 -
+	./sikradio-receiver -b 30000 -n "popek" 2>chuj.txt | play -t raw -c 2 -r 44100 -b 16 -e signed-integer --buffer 32768 -
 
 clean:
 	rm -rf *.o sikradio-receiver sikradio-sender
