@@ -118,6 +118,8 @@ uint16_t read_port(char *string) {
 //     return socket_fd;
 // }
 
+
+// TODO: to trzeba poprawić
 size_t read_message(int socket_fd, struct sockaddr_in *client_address, void *buffer, 
                     size_t max_length, const char *expected_src_addr) {
     socklen_t address_length = (socklen_t) sizeof(*client_address);
@@ -158,7 +160,8 @@ size_t read_message(int socket_fd, struct sockaddr_in *client_address, void *buf
     return (size_t) len;
 }
 
-size_t receive_music(int socket_fd, void *buffer, size_t max_length, int interrupt_dsc) {
+size_t receive_or_interrupt(int socket_fd, void *buffer, size_t max_length, int interrupt_dsc, 
+                            struct sockaddr_in *client_address = NULL) {
     fd_set readfds;
     FD_ZERO(&readfds);
     FD_SET(socket_fd, &readfds);
@@ -174,10 +177,13 @@ size_t receive_music(int socket_fd, void *buffer, size_t max_length, int interru
         PRINT_ERRNO();
     }
 
-    sockaddr_in client_address;
-
     if (FD_ISSET(socket_fd, &readfds)) {
-        return read_message(socket_fd, &client_address, buffer, max_length, NULL);
+        if (client_address != NULL) {
+            return read_message(socket_fd, client_address, buffer, max_length, NULL);
+        } else {
+            struct sockaddr_in client_address;
+            return read_message(socket_fd, &client_address, buffer, max_length, NULL);
+        }
     }
 
     if (FD_ISSET(interrupt_dsc, &readfds)) {

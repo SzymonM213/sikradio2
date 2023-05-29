@@ -154,9 +154,7 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     std::cerr << "new addr: " << src_addr << std::endl;
     char *receive_buf = static_cast<char*>(std::malloc(65536 + 16));
 
-    // int socket_fd = bind_socket(data_port);
     int data_socket_fd = open_udp_socket();
-    // set_port_reuse(socket_fd);
     set_socket_flag(data_socket_fd, SO_REUSEPORT);
 
     /* podłączenie do grupy rozsyłania (ang. multicast) */
@@ -171,10 +169,8 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     bind_socket(data_socket_fd, data_port);
 
     size_t psize;
-    // struct sockaddr_in client_address;
-    // psize = read_message(data_socket_fd, &client_address, receive_buf, 65535, NULL) - 16;
     std::cerr << "chuj\n";
-    psize = receive_music(data_socket_fd, receive_buf, 65535, reader_pipe_fd[1]) - 16;
+    psize = receive_or_interrupt(data_socket_fd, receive_buf, 65535, reader_pipe_fd[1]) - 16;
     std::cerr << "chuj2\n";
     if (psize == 0) {
         return;
@@ -189,23 +185,19 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
 
     locked_data_set(ld, bsize, psize, data_socket_fd, session_id, byte_zero, src_addr);
 
+
+    std::cerr << "lock2\n";
     CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
+    std::cerr << "polock2\n";
+    // CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
     memcpy(ld->data, receive_buf + 2 * sizeof(uint64_t), psize);
     ld->received[0] = true;
     CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
 
-    // struct sockaddr_in client_address;
-    // char receive_buf[65535];
-    // uint64_t session_id = 0;
     uint64_t first_byte_num = 0;
-    // CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
     while(ld->selected) {
-        // CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
         std::cerr << "chuj\n";
-        // ld->psize = read_message(ld->socket_fd, &client_address, receive_buf, 
-        //                          ld->psize + 16, NULL) - 16;
-        ld->psize = receive_music(ld->socket_fd, receive_buf, 
-                                  ld->psize + 16, reader_pipe_fd[1]) - 16;
+        ld->psize = receive_or_interrupt(ld->socket_fd, receive_buf, ld->psize + 16, reader_pipe_fd[1]) - 16;
         std::cerr << "chuj2\n";
         if (ld->psize == 0) {
             break;
@@ -215,9 +207,9 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
         session_id = be64toh(session_id);
         first_byte_num = be64toh(first_byte_num);
 
-        // std::cerr << "chuj\n";
+        std::cerr << "lock1\n";
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
-        // std::cerr << "chuj2\n";
+        std::cerr << "polock1\n";
         if (session_id > ld->session) {
             start_new_session(session_id, first_byte_num);
         }
@@ -268,6 +260,9 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
         }
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     }
+    CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
+    pthread_cond_signal(&ld->write);
+    CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     CHECK_ERRNO(close(ld->socket_fd));
     std::cerr << "koniec readera\n";
 }
@@ -281,6 +276,10 @@ void writer_main() {
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
         while (!ld->started_printing || ld->byte_to_write > ld->last_byte_received) {
             pthread_cond_wait(&ld->write, &ld->mutex);
+            if (!ld->selected) {
+                CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
+                return;
+            }
         }
         if (ld->byte_to_write < ld->first_byte_in_buf) {
             if (ld->byte_to_write + ld->my_bsize > ld->first_byte_in_buf) {
@@ -721,29 +720,35 @@ int main(int argc, char *argv[]) {
     locked_data_init(ld);
 
     while (true) {
+        std::cerr << "mainlock\n";
         CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
         while (stations.empty()) {
+            std::cerr << "mainwait\n";
             CHECK_ERRNO(pthread_cond_wait(&no_stations, &stations_mutex));
         }
-        std::cerr << "NASTĘPNA STACJA " << selected_station->first.name << " " << selected_station->first.mcast_addr << " " << selected_station->first.data_port << "\n";
-        //iterate over stations
-        for (auto it = stations.begin(); it != stations.end(); it++) {
-            std::cerr << it->first.name << " " << it->first.mcast_addr << " " << it->first.data_port << "\n";
-        }
+        std::cerr << "mainwriter\n";
+        // std::cerr << "NASTĘPNA STACJA " << selected_station->first.name << " " << selected_station->first.mcast_addr << " " << selected_station->first.data_port << "\n";
+        // //iterate over stations
+        // for (auto it = stations.begin(); it != stations.end(); it++) {
+        //     std::cerr << it->first.name << " " << it->first.mcast_addr << " " << it->first.data_port << "\n";
+        // }
         ld->selected = true;
         std::thread writer_thread(writer_main);
         // std::thread reader_thread(reader_main, "239.10.11.12", data_port, bsize);
         // std::cerr << strcmp(selected_station->first.mcast_addr, "239.10.11.12") << " " << selected_station->first.data_port << "\n";
         std::thread reader_thread(reader_main, selected_station->first.mcast_addr.c_str(), selected_station->first.data_port, bsize);
-        std::cerr << "WYPUŚCIŁEM " << selected_station->first.name << " " << selected_station->first.mcast_addr << " " << selected_station->first.data_port << "\n";
+        // std::cerr << "WYPUŚCIŁEM " << selected_station->first.name << " " << selected_station->first.mcast_addr << " " << selected_station->first.data_port << "\n";
         //iterate over stations
-        for (auto it = stations.begin(); it != stations.end(); it++) {
-            std::cerr << it->first.name << " " << it->first.mcast_addr << " " << it->first.data_port << "\n";
-        }
+        // for (auto it = stations.begin(); it != stations.end(); it++) {
+        //     std::cerr << it->first.name << " " << it->first.mcast_addr << " " << it->first.data_port << "\n";
+        // }
+        std::cerr << "mainunlock\n";
         CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
         writer_thread.join();
+        std::cerr << "mainreadjoin\n";
         reader_thread.join();
     }
+
     ui_thread.join();
     send_lookup_thread.join();
     receive_reply_thread.join();
