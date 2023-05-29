@@ -24,11 +24,12 @@
 #define MAX_UDP_DATAGRAM_SIZE 65507
 
 constexpr std::string_view LOOKUP_MSG = "ZERO_SEVEN_COME_IN\n";
+constexpr std::string_view REXMIT_MSG = "LOUDER_PLEASE";
 
 // constexpr std::string_view REPLY_MSG = "^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1,5})\\s([\\x20-\\x7F]{1,64})\\n$";
 
 std::regex REPLY_REGEX("^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1,5})\\s([\\x20-\\x7F]{1,64})\\n$");
-std::regex REXMIT_REGEX("^LOUDER_PLEASE (\\d+(?:,\\d+)*)\\n$");
+// std::regex REXMIT_REGEX("^LOUDER_PLEASE (\\d+(?:,\\d+)*)\\n$");
 
 struct LockedData {
   pthread_mutex_t mutex;
@@ -363,6 +364,67 @@ bool is_valid_name(const std::string &name) {
         return 0;
     }
     return 1;
+}
+
+bool is_valid_number(const std::string &number) {
+    for (char c : number.substr(0, number.size() - 1)) {
+        if (!isdigit(c) && c != '\n') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+std::vector<size_t> parse_rexmit_list(const std::string& input, size_t psize) {
+    std::vector<size_t> result;
+    std::stringstream ss(input);
+    std::string numberString;
+
+    while (std::getline(ss, numberString, ',')) {
+        // Trim leading and trailing whitespace
+        numberString.erase(0, numberString.find_first_not_of(" \t"));
+        numberString.erase(numberString.find_last_not_of(" \t") + 1);
+
+        // Check if the string is a valid size_t number
+        try {
+            size_t number = std::stoull(numberString);
+            if (!is_valid_number(numberString) || number % psize != 0) {
+                // Invalid number encountered, return an empty vector
+                return {};
+            }
+            PRINT_ERRNO();
+            result.push_back(number);
+        } catch (const std::exception&) {
+            // Invalid number encountered, return an empty vector
+            return {};
+        }
+    }
+
+    // Check if the last character is a newline character
+    if (!input.empty() && input.back() == '\n') {
+        // Extract the last number string
+        std::string lastNumberString = numberString.substr(0, numberString.size() - 1);
+
+        // Trim leading and trailing whitespace of the last number string
+        lastNumberString.erase(0, lastNumberString.find_first_not_of(" \t"));
+        lastNumberString.erase(lastNumberString.find_last_not_of(" \t") + 1);
+
+        // Check if the last number string is a valid size_t number
+        try {
+            // if (!is_valid_number(numberString)) {
+            //     // Invalid number encountered, return an empty vector
+            //     return {};
+            // }
+            size_t lastNumber = std::stoull(lastNumberString);
+            PRINT_ERRNO();
+            result.push_back(lastNumber);
+        } catch (const std::exception&) {
+            // Invalid number encountered, return an empty vector
+            return {};
+        }
+    }
+    result.pop_back();
+    return result;
 }
 
 #endif // UTILS_H
