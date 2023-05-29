@@ -650,7 +650,8 @@ int main(int argc, char *argv[]) {
     while((flag = getopt(argc, argv, "b:C:d:U:n:R:")) != -1) {
         switch(flag) {
             case 'b':
-                bsize = atoi(optarg);
+                bsize = strtoul(optarg, NULL, 10);
+                PRINT_ERRNO();
                 break;
             case 'C':
                 control_port = read_port(optarg);
@@ -663,6 +664,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'n':
                 fav_name = std::string(optarg);
+                if (is_valid_name(fav_name) == 0) {
+                    fatal("Wrong name");
+                }
                 break;
             case 'R':
                 rtime = atoi(optarg);
@@ -673,6 +677,9 @@ int main(int argc, char *argv[]) {
     }
     if (bsize < 1) {
         fatal("Wrong buffer size");
+    }
+    if (is_valid_addr(discover_addr) == 0) {
+        fatal("Wrong discover address");
     }
 
     int socket_fd = open_udp_socket();

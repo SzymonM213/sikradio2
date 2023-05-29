@@ -89,7 +89,10 @@ void handle_control_port(uint16_t ctrl_port, const char *mcast_addr, uint16_t da
         if (message == LOOKUP_MSG) {
             send_message(socket_fd, &sender_addr, reply_msg.c_str(), reply_msg.length());
         } else {
+            std::smatch matches;
+            if (std::regex_match(message, matches, REPLY_REGEX)) {
             // TODO: handle REXMIT
+            }
         }
     }
 }
@@ -129,7 +132,8 @@ int main(int argc, char* argv[]) {
             fsize = atoi(optarg);
             break;
         case 'R':
-            rtime = atoi(optarg);
+            rtime = strtoul(optarg, NULL, 10);
+            PRINT_ERRNO();
             break;
         default:
             fatal("Unknown argument");
@@ -192,7 +196,7 @@ int main(int argc, char* argv[]) {
     while(fread(packet + 2 * sizeof(uint64_t), 1, psize, stdin)) {
         first_byte_to_send = htobe64(first_byte_num);
         memcpy(packet + sizeof(uint64_t), &first_byte_to_send, sizeof(uint64_t));
-        std::cerr << "sending packet " << first_byte_num << "\n";
+        // std::cerr << "sending packet " << first_byte_num << "\n";
         send_message(socket_fd, &send_address, packet, psize + 16);
         first_byte_num += psize;
     }

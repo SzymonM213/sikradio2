@@ -28,6 +28,7 @@ constexpr std::string_view LOOKUP_MSG = "ZERO_SEVEN_COME_IN\n";
 // constexpr std::string_view REPLY_MSG = "^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1,5})\\s([\\x20-\\x7F]{1,64})\\n$";
 
 std::regex REPLY_REGEX("^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1,5})\\s([\\x20-\\x7F]{1,64})\\n$");
+std::regex REXMIT_REGEX("^LOUDER_PLEASE (\\d+(?:,\\d+)*)\\n$");
 
 struct LockedData {
   pthread_mutex_t mutex;
@@ -323,24 +324,29 @@ std::string receive_string(int socket_fd, size_t max_length, int flags = 0, stru
 
 bool is_valid_mcast(const char* address) {
     struct in_addr addr;
-    if (inet_pton(AF_INET, address, &addr) <= 0) {
-        printf("Invalid address\n");
+    
+    // Convert the address string to network byte order
+    if (inet_aton(address, &addr) == 0) {
+        // Failed to convert address
         return 0;
     }
-
-    unsigned char firstByte = addr.s_addr & 0xFF;
-    // Multicast addresses have the high-order bit of the first byte set to 1
-    if ((firstByte & 0x80) == 0x80) {
+    
+    // Check if the address is a multicast address
+    if (IN_MULTICAST(ntohl(addr.s_addr))) {
+        // Proper multicast address
         return 1;
-    } else {
-        return 0;
     }
+    
+    // Not a multicast address
+    return 0;
 }
 
 bool is_valid_addr(const std::string &addr) {
-    struct sockaddr_in sa;
-    int result = inet_pton(AF_INET, addr.c_str(), &(sa.sin_addr));
-    return result != 0;
+    struct addrinfo hints, *addr_in;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    return getaddrinfo(addr.c_str(), NULL, &hints, &addr_in) == 0;
 }
 
 bool is_valid_port(const std::string &port) {
@@ -350,6 +356,13 @@ bool is_valid_port(const std::string &port) {
 
 bool is_valid_psize(size_t &psize) {
     return psize > 0 && psize < 65536;
+}
+
+bool is_valid_name(const std::string &name) {
+    if (name.size() > 64 || name.size() < 1) {
+        return 0;
+    }
+    return 1;
 }
 
 #endif // UTILS_H
