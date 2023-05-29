@@ -80,8 +80,6 @@ void locked_data_set(struct LockedData* ld, uint64_t bsize, uint64_t psize,
   ld->last_byte_received = byte_zero;
   ld->psize = psize;
   ld->bsize = bsize;
-  std::cerr << "bsize: " << bsize << std::endl;
-  std::cerr << "psize: " << psize << std::endl;
   ld->my_bsize = bsize - bsize % psize; // real bsize for current session
   ld->data = static_cast<char*>(std::malloc(ld->bsize));
   ld->received = static_cast<bool*>(std::calloc(ld->my_bsize / psize, sizeof(bool)));

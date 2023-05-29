@@ -39,7 +39,7 @@ struct sockaddr_in sender;
 
 constexpr std::string_view UI_HEADER =
 "------------------------------------------------------------------------\n\r\n\r"
-"SIK Radio\n\r"
+"SIK Radio\n\r\n\r"
 "------------------------------------------------------------------------\n\r\n\r";
 
 constexpr std::string_view UI_FOOTER =
@@ -59,33 +59,20 @@ pthread_mutex_t stations_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t no_stations = PTHREAD_COND_INITIALIZER;
 
 void move_selected_station(bool up) {
-    if (stations.size() < 2) {
-        if(write(pipe_fd[1], "1", 1) < 0)  {
-            fatal("write");
+    if (stations.size() > 1) {
+        if(!up) {
+            // CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
+            selected_station++;
+            if (selected_station == stations.end()) {
+                selected_station = stations.begin();
+            } 
         }
-        if(write(reader_pipe_fd[1], "1", 1) < 0) {
-            fatal("write");
+        else {
+            if (selected_station == stations.begin()) {
+                selected_station = stations.end();
+            } 
+            selected_station--;
         }
-        ld->selected.store(false);
-        return;
-    }
-    if(!up) {
-        // CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
-        selected_station++;
-        if (selected_station == stations.end()) {
-            selected_station = stations.begin();
-        } 
-
-        // CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
-    }
-    else {
-        // CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
-        if (selected_station == stations.begin()) {
-            selected_station = stations.end();
-        } 
-        selected_station--;
-
-        // CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
     }
     if(write(pipe_fd[1], "1", 1) < 0)  {
         fatal("write");
@@ -173,9 +160,11 @@ void send_rexmit(size_t rtime) {
         usleep(rtime * 1000);
         if (ld->selected) {
             CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
+            // std::cerr << "TO WRITE: " << ld->byte_to_write
             for (uint64_t i = ld->byte_to_write; i < ld->last_byte_received; i += ld->psize) {
                 i = i % ld->my_bsize + ld->first_byte_in_buf;
                 assert(i - ld->first_byte_in_buf < ld->my_bsize);
+                std::cerr << "i: " << i << " last_byte_received: " << ld->last_byte_received << std::endl;
                 if (i != ld->last_byte_received && (i >= ld->first_byte_in_buf + ld->my_bsize ||
                     !ld->received[(i - ld->first_byte_in_buf) / ld->psize])) {
                     to_rexmit.push_back(i);
@@ -260,6 +249,9 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
         if (session_id == ld->session && first_byte_num >= ld->first_byte_in_buf) {
             ld->last_byte_received = max(ld->last_byte_received, first_byte_num);
             // std::cerr << "last_byte_received: " << ld->last_byte_received << "first_byte_in_buf: " << ld->first_byte_in_buf << "my_bsize: " << ld->my_bsize << "\n";
+            
+            assert(ld->byte_to_write <= ld->last_byte_received); //WYKURWIĆ TO
+            
             if (first_byte_num >= ld->first_byte_in_buf + 3 * ld->my_bsize / 4) {
                 ld->started_printing = true;
                 pthread_cond_signal(&ld->write);
@@ -289,6 +281,8 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
             if (first_byte_num == ld->byte_to_write + ld->bsize) {
                 ld->byte_to_write += ld->psize;
             }
+
+            assert(ld->byte_to_write <= ld->last_byte_received); //WYKURWIĆ TO
         
             // copy music data to buffer
             assert(first_byte_num >= ld->first_byte_in_buf);
@@ -349,7 +343,8 @@ void writer_main() {
 
             ld->received[index_to_write / ld->psize] = false;
         }
-
+        std::cerr << "byte_to_write: " << ld->byte_to_write << "last_byte_received: " << ld->last_byte_received << "\n";
+        assert(ld->byte_to_write <= ld->last_byte_received);
         ld->byte_to_write += ld->psize;
 
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
@@ -517,7 +512,9 @@ void handle_ui(uint16_t port) {
             poll_descriptors[i].revents = 0;
         }
 
+        CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
         size_t timeout = find_waiting_time();
+        CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
         int poll_status = poll(poll_descriptors.data(), connections, timeout);
         if (poll_status == -1) {
             fatal("poll() failed");

@@ -247,7 +247,8 @@ int main(int argc, char* argv[]) {
         first_byte_to_send = htobe64(first_byte_num);
         memcpy(packet + sizeof(uint64_t), &first_byte_to_send, sizeof(uint64_t));
         // std::cerr << "sending packet " << first_byte_num << "\n";
-        send_message(socket_fd, &send_address, packet, psize + 16);
+        if (first_byte_num / psize % 10 == 0) send_message(socket_fd, &send_address, packet, psize + 16);
+        // send_message(socket_fd, &send_address, packet, psize + 16);
 
         CHECK_ERRNO(pthread_mutex_lock(&queue_mutex));
         write_to_queue(packet, psize, first_byte_num);
