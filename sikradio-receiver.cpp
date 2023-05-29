@@ -61,7 +61,6 @@ pthread_cond_t no_stations = PTHREAD_COND_INITIALIZER;
 void move_selected_station(bool up) {
     if (stations.size() > 1) {
         if(!up) {
-            // CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
             selected_station++;
             if (selected_station == stations.end()) {
                 selected_station = stations.begin();
@@ -158,10 +157,18 @@ void send_rexmit(size_t rtime) {
 
     while(true) {
         usleep(rtime * 1000);
-        if (ld->selected) {
-            CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
-            // std::cerr << "TO WRITE: " << ld->byte_to_write
+        CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
+        if (ld->selected && ld->set_data) {
+            std::cerr << "TO WRITE: " << ld->byte_to_write << " LAST BYTE: " << ld->last_byte_received << std::endl;
+
+            size_t sum = 0;
+            for (size_t i = 0; i < ld->my_bsize / ld->psize; i++) {
+                sum += ld->received[i];
+            }
+            std::cerr << "SUMchuj: " << sum << std::endl;
+
             for (uint64_t i = ld->byte_to_write; i < ld->last_byte_received; i += ld->psize) {
+                std::cerr << "CHUUUUUUUUUUUUUUUUUUJ" << std::endl;
                 i = i % ld->my_bsize + ld->first_byte_in_buf;
                 assert(i - ld->first_byte_in_buf < ld->my_bsize);
                 std::cerr << "i: " << i << " last_byte_received: " << ld->last_byte_received << std::endl;
@@ -171,6 +178,9 @@ void send_rexmit(size_t rtime) {
                 }
             }
             addr = ld->station_address;
+
+            // std::cerr << "chuj, " << ld->last_byte_received - ld->byte_to_write << std::endl;
+
             CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
             if (to_rexmit.size() > 0) {
                 std::string rexmit_msg = "LOUDER_PLEASE ";
@@ -186,6 +196,8 @@ void send_rexmit(size_t rtime) {
                 sendto(socket_fd, rexmit_msg.c_str(), rexmit_msg.size(), 0, (struct sockaddr *) &addr,  sizeof(addr));
                 to_rexmit.clear();
             }
+        } else {
+            CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
         }
     }
 }
@@ -214,6 +226,7 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
         ld->selected.store(false);
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
         pthread_cond_signal(&ld->write);
+        std::cerr << "chuj, " << ld->last_byte_received - ld->byte_to_write << std::endl;
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
         CHECK_ERRNO(close(ld->socket_fd));
         return;
@@ -230,6 +243,7 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     locked_data_set(ld, bsize, psize, data_socket_fd, session_id, byte_zero, sender_addr);
     memcpy(ld->data, receive_buf + 2 * sizeof(uint64_t), psize);
     ld->received[0] = true;
+    std::cerr << "chuj2, " << ld->last_byte_received - ld->byte_to_write << std::endl;
     CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     uint64_t first_byte_num = 0;
     while(ld->selected) {
@@ -242,9 +256,18 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
         first_byte_num = be64toh(first_byte_num);
 
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
+
+
+        size_t sum = 0;
+        for (size_t i = 0; i < ld->my_bsize / ld->psize; i++) {
+            sum += ld->received[i];
+        }
+        std::cerr << "SUM: " << sum << std::endl;
+
         if (session_id > ld->session) {
             start_new_session(session_id, first_byte_num);
         }
+
 
         if (session_id == ld->session && first_byte_num >= ld->first_byte_in_buf) {
             ld->last_byte_received = max(ld->last_byte_received, first_byte_num);
@@ -262,6 +285,7 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
                 if (ld->first_byte_in_buf + ld->my_bsize < 
                     first_byte_num - ld->my_bsize + ld->psize) {
                     // many missing packets - save last raceived packet to the end of the buffer
+                    std::cerr << "ZERUJEMY KURWA2\n";
                     memset(ld->received, 0, ld->my_bsize / ld->psize);
                     ld->first_byte_in_buf = first_byte_num + ld->psize - ld->my_bsize;
                 } else {
@@ -269,6 +293,7 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
                     ld->first_byte_in_buf += ld->my_bsize;
                     assert(first_byte_num >= ld->first_byte_in_buf);
                     assert(first_byte_num - ld->first_byte_in_buf < ld->my_bsize);
+                    std::cerr << "ZERUJEMY KURWA1\n";
                     for (uint64_t i = ld->first_byte_in_buf; i < first_byte_num; i += ld->psize) {
                         ld->received[(i - ld->first_byte_in_buf) / ld->psize] = 0;
                     }
@@ -295,11 +320,13 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
                 pthread_cond_signal(&ld->write);
             }
         }
+        std::cerr << "chuj5, " << ld->last_byte_received - ld->byte_to_write << std::endl;
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     }
     ld->selected.store(false);
     CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
     pthread_cond_signal(&ld->write);
+    std::cerr << "chuj6, " << ld->last_byte_received - ld->byte_to_write << std::endl;
     CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     CHECK_ERRNO(close(ld->socket_fd));
 }
@@ -313,10 +340,19 @@ void writer_main() {
         while (!ld->started_printing || ld->byte_to_write > ld->last_byte_received) {
             pthread_cond_wait(&ld->write, &ld->mutex);
             if (!ld->selected) {
+                std::cerr << "chuj7, " << ld->last_byte_received - ld->byte_to_write << std::endl;
                 CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
                 return;
             }
         }
+
+        size_t sum = 0;
+        for (size_t i = 0; i < ld->my_bsize / ld->psize; i++) {
+            sum += ld->received[i];
+        }
+        std::cerr << "SUMkurwa: " << sum << std::endl;
+
+
         if (ld->byte_to_write < ld->first_byte_in_buf) {
             if (ld->byte_to_write + ld->my_bsize > ld->first_byte_in_buf) {
                 index_to_write = ld->byte_to_write - ld->first_byte_in_buf + ld->my_bsize;
@@ -343,10 +379,12 @@ void writer_main() {
 
             ld->received[index_to_write / ld->psize] = false;
         }
-        std::cerr << "byte_to_write: " << ld->byte_to_write << "last_byte_received: " << ld->last_byte_received << "\n";
+        // std::cerr << "byte_to_write: " << ld->byte_to_write << "last_byte_received: " << ld->last_byte_received << "\n";
         assert(ld->byte_to_write <= ld->last_byte_received);
         ld->byte_to_write += ld->psize;
 
+
+        std::cerr << "chuj8, " << ld->last_byte_received << " " << ld->byte_to_write << std::endl;
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
         fwrite(buf_to_print, 1, ld->psize, stdout);
         // for (size_t i = 0; i < ld->psize; i++) {
@@ -722,24 +760,6 @@ int main(int argc, char *argv[]) {
     std::thread send_lookup_thread(send_lookup, control_port, discover_addr, socket_fd);
     std::thread receive_reply_thread(receive_reply, socket_fd);
 
-    
-
-    // pthread_t writer_thread;
-    // pthread_t reader_thread;
-    // std::thread writer_thread(writer_main);
-    // std::thread reader_thread(reader_main, src_addr, data_port, bsize);
-
-
-    // pthread_create(&writer_thread, NULL, writer_main, NULL);
-    // pthread_create(&reader_thread, NULL, reader_main, NULL);
-
-    // std::thread writer_thread(writer_main);
-    // std::thread reader_thread(reader_main);
-
-
-    // pthread_join(reader_thread, NULL);
-    // pthread_join(writer_thread, NULL);
-
     ld = static_cast<LockedData*>(malloc(sizeof(LockedData)));
     locked_data_init(ld);
     std::thread rexmit_thread(send_rexmit, rtime);
@@ -752,13 +772,8 @@ int main(int argc, char *argv[]) {
             CHECK_ERRNO(pthread_cond_wait(&no_stations, &stations_mutex));
         }
         std::cerr << "mainwriter\n";
-        // std::cerr << "NASTĘPNA STACJA " << selected_station->first.name << " " << selected_station->first.mcast_addr << " " << selected_station->first.data_port << "\n";
-        // //iterate over stations
-        // for (auto it = stations.begin(); it != stations.end(); it++) {
-        //     std::cerr << it->first.name << " " << it->first.mcast_addr << " " << it->first.data_port << "\n";
-        // }
-        ld->selected = true;
         ld->started_printing = false;
+        ld->selected = true;
         // std::thread reader_thread(reader_main, "239.10.11.12", data_port, bsize);
         // std::cerr << strcmp(selected_station->first.mcast_addr, "239.10.11.12") << " " << selected_station->first.data_port << "\n";
         std::thread reader_thread(reader_main, selected_station->first.mcast_addr.c_str(), selected_station->first.data_port, bsize);

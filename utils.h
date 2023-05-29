@@ -47,6 +47,7 @@ struct LockedData {
   bool started_printing;
   char *src_addr;
   std::atomic<bool> selected;
+  std::atomic<bool> set_data;
   struct sockaddr_in station_address;
 };
 
@@ -86,12 +87,15 @@ void locked_data_set(struct LockedData* ld, uint64_t bsize, uint64_t psize,
   ld->socket_fd = socket_fd;
   ld->session = session;
   ld->station_address = station_address;
+  ld->set_data = true;
 }
 
 void locked_data_init(struct LockedData* ld) {
     CHECK_ERRNO(pthread_mutex_init(&ld->mutex, NULL));
     CHECK_ERRNO(pthread_cond_init(&ld->write, NULL));
     ld->started_printing = false;
+    ld->selected = false;
+    ld->set_data = false;
 }
 
 uint16_t read_port(char *string) {
