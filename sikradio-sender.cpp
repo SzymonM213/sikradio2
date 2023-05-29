@@ -93,20 +93,21 @@ void handle_control_port(uint16_t ctrl_port, const char *mcast_addr,
         struct sockaddr_in sender_addr;
         // socklen_t sender_addr_len = sizeof(sender_addr);
         
-        std::cerr << "Waiting for message" << std::endl;
+        // std::cerr << "Waiting for message" << std::endl;
         // std::string message = receive_string(socket_fd, MAX_UDP_DATAGRAM_SIZE, 0, &sender_addr);
         char *buffer = (char *) malloc(MAX_UDP_DATAGRAM_SIZE);
         if (receive_or_interrupt(socket_fd, buffer, MAX_UDP_DATAGRAM_SIZE, pipe_end[0], &sender_addr) < 0) {
             free(buffer);
             break;
         }
-        std::cerr << "Received message: " << buffer;
+        // std::cerr << "Received message: " << buffer;
         std::string message(buffer);
 
 
         if (message == LOOKUP_MSG) {
             send_message(socket_fd, &sender_addr, reply_msg.c_str(), reply_msg.length());
-        } else if (message.size() > 13 && message.substr(0, 13) == REXMIT_MSG){
+        } else if (message.size() > 13 && message.substr(0, 13) == REXMIT_MSG) {
+            std::cerr << "Received rexmit message" << std::endl;
             std::vector<size_t> numbers = parse_rexmit_list(message.substr(13), psize);
             if (!numbers.empty()) {
                 CHECK_ERRNO(pthread_mutex_lock(&rexmit_mutex));
@@ -149,21 +150,34 @@ int main(int argc, char* argv[]) {
             mcast_addr = optarg;
             break;
         case 'P':
+            if (is_valid_number(optarg) == false) {
+                fatal("Wrong data_port");
+            }
             data_port = read_port(optarg);
             break;
         case 'C':
+            if (is_valid_number(optarg) == false) {
+                fatal("Wrong data_port");
+            }
             ctrl_port = read_port(optarg);
             break;
         case 'p':
-            psize = atoi(optarg);
+            psize = check_number(optarg);
             break;
         case 'n':
             name = optarg;
             break;
         case 'f':
-            fsize = atoi(optarg);
+            if(!is_valid_number(optarg)) {
+                fatal("Wrong fsize");
+            }
+            fsize = strtol(optarg, NULL, 10);
+            PRINT_ERRNO();
             break;
         case 'R':
+            if (is_valid_number(optarg) == false) {
+                fatal("Wrong rtime");
+            }
             rtime = strtoul(optarg, NULL, 10);
             PRINT_ERRNO();
             break;
@@ -174,7 +188,7 @@ int main(int argc, char* argv[]) {
     if (!mcast_addr || !is_valid_mcast(mcast_addr)) {
         fatal("Invalid multicast address");
     }
-    if (psize < 1 || psize > 65535 - 16) {
+    if (psize < 1 || psize > 65507 - 16) {
         fatal("Wrong psize");
     }
     if (fsize == 0) {
@@ -182,6 +196,12 @@ int main(int argc, char* argv[]) {
     }
     if (name.length() == 0 || name.length() >= 64) {
         fatal("wrong name");
+    }
+    if (rtime == 0) {
+        fatal("wrong rtime");
+    }
+    if (fsize < psize) {
+        fatal("fsize < psize");
     }
 
     CHECK(pipe(pipe_end));

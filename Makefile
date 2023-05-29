@@ -4,7 +4,7 @@ CFLAGS = -Wall -Wextra -lpthread -O2 -std=gnu++17 -g
 
 all: sikradio-receiver sikradio-sender
 
-sikradio-sender sikradio-receiver: 
+sikradio-sender sikradio-receiver remix: 
 	$(CC) $(CFLAGS) $@.cpp err.h utils.h -o $@
 
 popek:

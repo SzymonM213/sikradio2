@@ -35,13 +35,15 @@ std::string fav_name = "";
 int pipe_fd[2];
 int reader_pipe_fd[2];
 
+struct sockaddr_in sender;
+
 constexpr std::string_view UI_HEADER =
 "------------------------------------------------------------------------\n\r\n\r"
 "SIK Radio\n\r"
 "------------------------------------------------------------------------\n\r\n\r";
 
 constexpr std::string_view UI_FOOTER =
-"------------------------------------------------------------------------\n\r\n\r";
+"------------------------------------------------------------------------\n\r";
 
 struct ControlData {
     uint16_t port;
@@ -57,9 +59,7 @@ pthread_mutex_t stations_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t no_stations = PTHREAD_COND_INITIALIZER;
 
 void move_selected_station(bool up) {
-    std::cerr << "move_selected_station" << std::endl;
     if (stations.size() < 2) {
-        std::cerr << "only one station\n" << std::endl;
         if(write(pipe_fd[1], "1", 1) < 0)  {
             fatal("write");
         }
@@ -97,9 +97,7 @@ void move_selected_station(bool up) {
 }
 
 void remove_station(std::map<RadioStation, uint64_t>::iterator station) {
-    std::cerr << "removing station: " << station->first.name << std::endl;
     if (station == selected_station) {
-        std::cerr << "looking for " << fav_name << std::endl;
         for (auto it = stations.begin(); it != stations.end(); it++) {
             if (it->first.name == fav_name) {
                 selected_station = it;
@@ -112,11 +110,7 @@ void remove_station(std::map<RadioStation, uint64_t>::iterator station) {
                 return;
             }
         }
-        std::cerr << "no fav station" << std::endl;
-        // CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
         move_selected_station(false);
-        // CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
-        // printf("chuj2\n");
     }
     stations.erase(station);
 }
@@ -150,22 +144,64 @@ size_t find_waiting_time() {
     return waiting_time;
 }
 
-void print_missing(uint64_t first_byte_num) {
-    for (uint64_t i = ld->byte_to_write; i < first_byte_num; i += ld->psize) {
-        while (i < ld->first_byte_in_buf) {
-            i += ld->my_bsize;
-        }
-        assert(i - ld->first_byte_in_buf < ld->my_bsize);
-        if (i != first_byte_num && (i >= ld->first_byte_in_buf + ld->my_bsize ||
-            !ld->received[(i - ld->first_byte_in_buf) / ld->psize])) {
-            fprintf(stderr, "MISSING: BEFORE %lu EXPECTED %lu\n", 
-                    first_byte_num / ld->psize, i / ld->psize);
+// void print_missing(uint64_t first_byte_num, struct addrinfo *addr) { 
+//     for (uint64_t i = ld->byte_to_write; i < first_byte_num; i += ld->psize) {
+//         // while (i < ld->first_byte_in_buf) {
+//         //     i += ld->my_bsize;
+//         // }
+//         i = i % ld->my_bsize + ld->first_byte_in_buf;
+//         assert(i - ld->first_byte_in_buf < ld->my_bsize);
+//         if (i != first_byte_num && (i >= ld->first_byte_in_buf + ld->my_bsize ||
+//             !ld->received[(i - ld->first_byte_in_buf) / ld->psize])) {
+//             // fprintf(stderr, "MISSING: BEFORE %lu EXPECTED %lu\n", 
+//             //         first_byte_num / ld->psize, i / ld->psize);
+            
+//         }
+//     }
+// }
+
+void send_rexmit(size_t rtime) {
+    std::vector<uint64_t> to_rexmit;
+
+    int socket_fd = open_udp_socket();
+    set_socket_flag(socket_fd, SO_BROADCAST);
+    set_socket_flag(socket_fd, SO_REUSEPORT);
+
+    struct sockaddr_in addr;
+
+    while(true) {
+        usleep(rtime * 1000);
+        if (ld->selected) {
+            CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
+            for (uint64_t i = ld->byte_to_write; i < ld->last_byte_received; i += ld->psize) {
+                i = i % ld->my_bsize + ld->first_byte_in_buf;
+                assert(i - ld->first_byte_in_buf < ld->my_bsize);
+                if (i != ld->last_byte_received && (i >= ld->first_byte_in_buf + ld->my_bsize ||
+                    !ld->received[(i - ld->first_byte_in_buf) / ld->psize])) {
+                    to_rexmit.push_back(i);
+                }
+            }
+            addr = ld->station_address;
+            CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
+            if (to_rexmit.size() > 0) {
+                std::string rexmit_msg = "LOUDER_PLEASE ";
+                for (uint64_t i = 0; i < to_rexmit.size(); i++) {
+                    rexmit_msg += std::to_string(to_rexmit[i]) + ",";
+                }
+                // delete last comma
+                if (to_rexmit.size() > 0) {
+                    rexmit_msg.pop_back();
+                }
+                rexmit_msg += "\n";
+                std::cerr << "sending remix\n";
+                sendto(socket_fd, rexmit_msg.c_str(), rexmit_msg.size(), 0, (struct sockaddr *) &addr,  sizeof(addr));
+                to_rexmit.clear();
+            }
         }
     }
 }
 
 void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
-    std::cerr << "new addr: " << src_addr << std::endl;
     char *receive_buf = static_cast<char*>(std::malloc(65536 + 16));
 
     int data_socket_fd = open_udp_socket();
@@ -183,16 +219,14 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     bind_socket(data_socket_fd, data_port);
 
     ssize_t psize;
-    std::cerr << "chuj\n";
-    psize = receive_or_interrupt(data_socket_fd, receive_buf, MAX_UDP_DATAGRAM_SIZE, reader_pipe_fd[0]) - 16;
-    std::cerr << "chuj2\n";
+    struct sockaddr_in sender_addr;
+    psize = receive_or_interrupt(data_socket_fd, receive_buf, MAX_UDP_DATAGRAM_SIZE, reader_pipe_fd[0], &sender_addr) - 16;
     if (psize < 0) {
         ld->selected.store(false);
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
         pthread_cond_signal(&ld->write);
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
         CHECK_ERRNO(close(ld->socket_fd));
-        std::cerr << "koniec readera2\n";
         return;
     }
     uint64_t session_id = 0;
@@ -203,38 +237,29 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     session_id = be64toh(session_id);
     byte_zero = be64toh(byte_zero);
 
-
-
-    std::cerr << "lock2\n";
     CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
-    locked_data_set(ld, bsize, psize, data_socket_fd, session_id, byte_zero, src_addr);
-    std::cerr << "polock2\n";
-    // CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
+    locked_data_set(ld, bsize, psize, data_socket_fd, session_id, byte_zero, sender_addr);
     memcpy(ld->data, receive_buf + 2 * sizeof(uint64_t), psize);
     ld->received[0] = true;
     CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     uint64_t first_byte_num = 0;
     while(ld->selected) {
-        std::cerr << "chuj3\n";
         if (receive_or_interrupt(ld->socket_fd, receive_buf, ld->psize + 16, reader_pipe_fd[0]) < 0) {
-            std::cerr << "chuj3.5\n";
             break;
         }
-        std::cerr << "chuj4\n";
         memcpy(&session_id, receive_buf, sizeof(uint64_t));
         memcpy(&first_byte_num, receive_buf + sizeof(uint64_t), sizeof(uint64_t));
         session_id = be64toh(session_id);
         first_byte_num = be64toh(first_byte_num);
 
-        std::cerr << "lock1\n";
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
-        std::cerr << "polock1\n";
         if (session_id > ld->session) {
             start_new_session(session_id, first_byte_num);
         }
 
         if (session_id == ld->session && first_byte_num >= ld->first_byte_in_buf) {
             ld->last_byte_received = max(ld->last_byte_received, first_byte_num);
+            // std::cerr << "last_byte_received: " << ld->last_byte_received << "first_byte_in_buf: " << ld->first_byte_in_buf << "my_bsize: " << ld->my_bsize << "\n";
             if (first_byte_num >= ld->first_byte_in_buf + 3 * ld->my_bsize / 4) {
                 ld->started_printing = true;
                 pthread_cond_signal(&ld->write);
@@ -258,7 +283,7 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
                 }
             }
             
-            print_missing(first_byte_num);
+            // print_missing(first_byte_num);
 
             // not to double writing thread
             if (first_byte_num == ld->byte_to_write + ld->bsize) {
@@ -269,13 +294,10 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
             assert(first_byte_num >= ld->first_byte_in_buf);
             memcpy(ld->data + (first_byte_num - ld->first_byte_in_buf), 
                    receive_buf + 16, ld->psize);
-            std::cerr << "first_byte_num: " << first_byte_num << "first_byte_in_buf: " << ld->first_byte_in_buf << "\n";
-            std::cerr << "my_bsize: " << ld->my_bsize << "\n";
             assert(first_byte_num >= ld->first_byte_in_buf && 
                    first_byte_num - ld->first_byte_in_buf < ld->my_bsize);
             ld->received[(first_byte_num - ld->first_byte_in_buf) / ld->psize] = true;
             if (ld->last_byte_received >= ld->byte_to_write && ld->started_printing) {
-                // std::cerr << "podnoszę\n";
                 pthread_cond_signal(&ld->write);
             }
         }
@@ -286,23 +308,18 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     pthread_cond_signal(&ld->write);
     CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     CHECK_ERRNO(close(ld->socket_fd));
-    std::cerr << "koniec readera\n";
 }
 
 void writer_main() {
-    // std::cerr << "writer started" << std::endl;
     uint64_t index_to_write;
     char buf_to_print[65536];
 
     while(ld->selected) {
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
         while (!ld->started_printing || ld->byte_to_write > ld->last_byte_received) {
-            std::cerr << "writer sie wiesza\n";
             pthread_cond_wait(&ld->write, &ld->mutex);
-            std::cerr << "writer sie nie wiesza\n";
             if (!ld->selected) {
                 CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
-                std::cerr << "koniec writera2\n";
                 return;
             }
         }
@@ -319,7 +336,6 @@ void writer_main() {
         }
         assert(index_to_write % ld->psize == 0);
         // if the packet wasn't received yet, print 0s
-        std::cerr << "index_to_write: " << index_to_write << "my_bsize: " << ld->my_bsize << std::endl;
         assert(index_to_write < ld->my_bsize);
         if (!ld->received[index_to_write / ld->psize]) {;
             for (uint64_t i = 0; i < ld->psize; i++) {
@@ -342,7 +358,6 @@ void writer_main() {
         //     printf("%c", buf_to_print[i]);
         // }
     }
-    std::cerr << "koniec writera\n";
 }
 
 void send_lookup(uint16_t port, const char *addr, int socket_fd) {
@@ -373,17 +388,15 @@ void send_lookup(uint16_t port, const char *addr, int socket_fd) {
     // Send the broadcast message and update stations
     struct timeval tp;
     while (true) {
-        // std::cerr << message;
         if (sendto(socket_fd, message, strlen(message), 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0) {
             fatal("sendto() failed");
         }
-        std::cerr << "=========================\n";
         CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
         gettimeofday(&tp, NULL);
-        uint64_t time = tp.tv_sec * 1000 + tp.tv_usec / 1000;
-        for (const auto &it : stations) {
-            std::cerr << it.first.name << " " << time - it.second << "\n";
-        }
+        // uint64_t time = tp.tv_sec * 1000 + tp.tv_usec / 1000;
+        // for (const auto &it : stations) {
+        //     std::cerr << it.first.name << " " << time - it.second << "\n";
+        // }
         CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
         sleep(5);
     }
@@ -397,7 +410,6 @@ void receive_reply(int socket_fd) {
 
     while (true) {
         std::string message = receive_string(socket_fd, MAX_UDP_DATAGRAM_SIZE);
-        std::cerr << "received: " << message;
         std::smatch matches;
         if (std::regex_match(message, matches, REPLY_REGEX)) {
             gettimeofday(&tp, NULL);
@@ -408,20 +420,8 @@ void receive_reply(int socket_fd) {
             // std::string name;
             // ss >> mcast_addr >> port >> name;
             pthread_mutex_lock(&stations_mutex);
-            std::cerr << "DODAJĘ STACJĘ\n";
-            for (auto it = stations.begin(); it != stations.end(); it++) {
-                std::cerr << it->first.name << " " << it->first.mcast_addr << " " << it->first.data_port << "\n";
-            }
-
             std::string mcast_addr = matches[1].str();
-
-            std::cerr << "NOWA STACJA\n";
-            //iterate over stations
-            for (auto it = stations.begin(); it != stations.end(); it++) {
-                std::cerr << it->first.name << " " << it->first.mcast_addr << " " << it->first.data_port << "\n";
-            }
             pthread_mutex_unlock(&stations_mutex);
-            std::cerr << "NOWY ADRES: " << mcast_addr << "\n";
             size_t port = std::stoul(matches[2]);
             std::string name = matches[3];
             if (port > UINT16_MAX || port == 0) {
@@ -559,7 +559,6 @@ void handle_ui(uint16_t port) {
                 };
             }
             if (poll_descriptors[1].revents & POLLIN) {
-                std::cerr << "refresh\n";
                 ssize_t received_bytes = read(poll_descriptors[1].fd, buf[1], buf_size);
                 if (received_bytes < 0) {
                     fatal("read() failed");
@@ -681,6 +680,9 @@ int main(int argc, char *argv[]) {
     if (is_valid_addr(discover_addr) == 0) {
         fatal("Wrong discover address");
     }
+    if (rtime == 0) {
+        fatal("Wrong refresh time");
+    }
 
     int socket_fd = open_udp_socket();
     set_socket_flag(socket_fd, SO_BROADCAST);
@@ -743,6 +745,7 @@ int main(int argc, char *argv[]) {
 
     ld = static_cast<LockedData*>(malloc(sizeof(LockedData)));
     locked_data_init(ld);
+    std::thread rexmit_thread(send_rexmit, rtime);
 
     while (true) {
         std::cerr << "mainlock\n";
@@ -778,6 +781,7 @@ int main(int argc, char *argv[]) {
     ui_thread.join();
     send_lookup_thread.join();
     receive_reply_thread.join();
+    rexmit_thread.join();
     // pthread_join(send_lookup_thread, NULL);
     // pthread_join(receive_reply_thread, NULL);
     return 0;

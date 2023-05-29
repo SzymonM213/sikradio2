@@ -47,6 +47,7 @@ struct LockedData {
   bool started_printing;
   char *src_addr;
   std::atomic<bool> selected;
+  struct sockaddr_in station_address;
 };
 
 struct RadioStation {
@@ -71,7 +72,7 @@ uint64_t max(uint64_t a, uint64_t b) {
 
 void locked_data_set(struct LockedData* ld, uint64_t bsize, uint64_t psize, 
                       uint64_t socket_fd, uint64_t session, uint64_t byte_zero, 
-                      const char *src_addr) {
+                      sockaddr_in station_address) {
 //   pthread_mutex_init(&ld->mutex, NULL);
 //   pthread_cond_init(&ld->write, NULL);
   ld->first_byte_in_buf = byte_zero;
@@ -86,8 +87,7 @@ void locked_data_set(struct LockedData* ld, uint64_t bsize, uint64_t psize,
   ld->received = static_cast<bool*>(std::calloc(ld->my_bsize / psize, sizeof(bool)));
   ld->socket_fd = socket_fd;
   ld->session = session;
-  ld->src_addr = static_cast<char*>(std::malloc(strlen(src_addr) + 1));
-  strcpy(ld->src_addr, src_addr);
+  ld->station_address = station_address;
 }
 
 void locked_data_init(struct LockedData* ld) {
@@ -367,12 +367,22 @@ bool is_valid_name(const std::string &name) {
 }
 
 bool is_valid_number(const std::string &number) {
-    for (char c : number.substr(0, number.size() - 1)) {
+    for (char c : number.substr(0, number.size())) {
+        std::cerr << c << std::endl;
         if (!isdigit(c) && c != '\n') {
             return 0;
         }
     }
     return 1;
+}
+
+size_t check_number(const std::string &number) {
+    if(!is_valid_number(number)) {
+        fatal("Wrong fsize");
+    }
+    size_t result = strtol(optarg, NULL, 10);
+    PRINT_ERRNO();
+    return result;
 }
 
 std::vector<size_t> parse_rexmit_list(const std::string& input, size_t psize) {
