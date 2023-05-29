@@ -168,12 +168,14 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
 
     bind_socket(data_socket_fd, data_port);
 
-    size_t psize;
+    ssize_t psize;
     std::cerr << "chuj\n";
-    psize = receive_or_interrupt(data_socket_fd, receive_buf, 65535, reader_pipe_fd[1]) - 16;
+    psize = receive_or_interrupt(data_socket_fd, receive_buf, MAX_UDP_DATAGRAM_SIZE, reader_pipe_fd[1]) - 16;
     std::cerr << "chuj2\n";
-    if (psize == 0) {
-        return;
+    if (psize < 0) {
+        CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
+        pthread_cond_signal(&ld->write);
+        CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     }
     uint64_t session_id = 0;
     uint64_t byte_zero;
@@ -193,13 +195,10 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     memcpy(ld->data, receive_buf + 2 * sizeof(uint64_t), psize);
     ld->received[0] = true;
     CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
-
     uint64_t first_byte_num = 0;
     while(ld->selected) {
         std::cerr << "chuj\n";
-        ld->psize = receive_or_interrupt(ld->socket_fd, receive_buf, ld->psize + 16, reader_pipe_fd[1]) - 16;
-        std::cerr << "chuj2\n";
-        if (ld->psize == 0) {
+        if (receive_or_interrupt(ld->socket_fd, receive_buf, ld->psize + 16, reader_pipe_fd[1]) < 0) {
             break;
         }
         memcpy(&session_id, receive_buf, sizeof(uint64_t));

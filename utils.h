@@ -160,7 +160,30 @@ size_t read_message(int socket_fd, struct sockaddr_in *client_address, void *buf
     return (size_t) len;
 }
 
-size_t receive_or_interrupt(int socket_fd, void *buffer, size_t max_length, int interrupt_dsc, 
+inline static size_t receive_message(int socket_fd, void *buffer, size_t max_length, int flags) {
+    errno = 0;
+    ssize_t received_length = recv(socket_fd, buffer, max_length, flags);
+    if (received_length < 0) {
+        PRINT_ERRNO();
+    }
+    return (size_t) received_length;
+}
+
+inline static size_t receive_message_from(int socket_fd, void *buffer, size_t max_length, int flags, 
+                                          struct sockaddr_in *client_address) {
+    socklen_t address_length = (socklen_t) sizeof(*client_address);
+    errno = 0;
+    ssize_t received_length = recvfrom(socket_fd, buffer, max_length, flags,
+                                       (struct sockaddr *) client_address, &address_length);
+    if (received_length < 0) {
+        PRINT_ERRNO();
+    }
+    return (size_t) received_length;
+}
+
+
+// return -1 if interrupted
+ssize_t receive_or_interrupt(int socket_fd, void *buffer, size_t max_length, int interrupt_dsc, 
                             struct sockaddr_in *client_address = NULL) {
     fd_set readfds;
     FD_ZERO(&readfds);
@@ -179,10 +202,13 @@ size_t receive_or_interrupt(int socket_fd, void *buffer, size_t max_length, int 
 
     if (FD_ISSET(socket_fd, &readfds)) {
         if (client_address != NULL) {
-            return read_message(socket_fd, client_address, buffer, max_length, NULL);
+            // return read_message(socket_fd, client_address, buffer, max_length, NULL);
+            // return recv(socket_fd, buffer, max_length, 0);
+            return receive_message_from(socket_fd, buffer, max_length, 0, client_address);
         } else {
-            struct sockaddr_in client_address;
-            return read_message(socket_fd, &client_address, buffer, max_length, NULL);
+            // struct sockaddr_in client_address;
+            // return read_message(socket_fd, &client_address, buffer, max_length, NULL);
+            return receive_message(socket_fd, buffer, max_length, 0);
         }
     }
 
@@ -191,7 +217,7 @@ size_t receive_or_interrupt(int socket_fd, void *buffer, size_t max_length, int 
         if (received_bytes < 0) {
             PRINT_ERRNO();
         }
-        return 0;
+        return -1;
     }
 
     return 0;
@@ -263,15 +289,6 @@ inline static int accept_connection(int socket_fd, struct sockaddr_in *client_ad
     }
 
     return client_fd;
-}
-
-inline static size_t receive_message(int socket_fd, void *buffer, size_t max_length, int flags) {
-    errno = 0;
-    ssize_t received_length = recv(socket_fd, buffer, max_length, flags);
-    if (received_length < 0) {
-        PRINT_ERRNO();
-    }
-    return (size_t) received_length;
 }
 
 size_t recv_with_timeout(int socket_fd, void *buffer, size_t length, int flags, int timeout) {
