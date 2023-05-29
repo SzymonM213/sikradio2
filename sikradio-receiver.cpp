@@ -4,7 +4,6 @@
 #include <sys/stat.h>
 #include <netinet/in.h>
 #include <stdio.h>
-// #include <string.h>
 #include <unistd.h>
 #include <stdint.h>
 #include <getopt.h>
@@ -45,12 +44,6 @@ constexpr std::string_view UI_HEADER =
 constexpr std::string_view UI_FOOTER =
 "------------------------------------------------------------------------\n\r";
 
-struct ControlData {
-    uint16_t port;
-    const char *addr;
-    int socket_fd;
-};
-
 struct LockedData *ld;
 std::map<RadioStation, uint64_t> stations;
 std::map<RadioStation, uint64_t>::iterator selected_station;
@@ -87,9 +80,6 @@ void remove_station(std::map<RadioStation, uint64_t>::iterator station) {
         for (auto it = stations.begin(); it != stations.end(); it++) {
             if (it->first.name == fav_name) {
                 selected_station = it;
-                // if(write(pipe_fd[1], "1", 1) < 0)  {
-                //     fatal("write");
-                // }
                 if(write(reader_pipe_fd[1], "1", 1) < 0) {
                     fatal("write");
                 }
@@ -130,28 +120,10 @@ size_t find_waiting_time() {
     return waiting_time;
 }
 
-// void print_missing(uint64_t first_byte_num, struct addrinfo *addr) { 
-//     for (uint64_t i = ld->byte_to_write; i < first_byte_num; i += ld->psize) {
-//         // while (i < ld->first_byte_in_buf) {
-//         //     i += ld->my_bsize;
-//         // }
-//         i = i % ld->my_bsize + ld->first_byte_in_buf;
-//         assert(i - ld->first_byte_in_buf < ld->my_bsize);
-//         if (i != first_byte_num && (i >= ld->first_byte_in_buf + ld->my_bsize ||
-//             !ld->received[(i - ld->first_byte_in_buf) / ld->psize])) {
-//             // fprintf(stderr, "MISSING: BEFORE %lu EXPECTED %lu\n", 
-//             //         first_byte_num / ld->psize, i / ld->psize);
-            
-//         }
-//     }
-// }
-
 void send_rexmit(size_t rtime, uint16_t control_port) {
     std::vector<uint64_t> to_rexmit;
 
     int socket_fd = open_udp_socket();
-    // set_socket_flag(socket_fd, SO_BROADCAST);
-    // set_socket_flag(socket_fd, SO_REUSEPORT);
 
     struct sockaddr_in addr;
 
@@ -159,17 +131,14 @@ void send_rexmit(size_t rtime, uint16_t control_port) {
         usleep(rtime * 1000);
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
         if (ld->selected && ld->set_data) {
-            std::cerr << "TO WRITE: " << ld->byte_to_write << " LAST BYTE: " << ld->last_byte_received << std::endl;
             size_t sum = 0;
             for (size_t i = 0; i < ld->my_bsize / ld->psize; i++) {
                 sum += ld->received[i];
             }
-            std::cerr << "SUMchuj: " << sum << std::endl;
 
             for (uint64_t i = ld->byte_to_write; i < ld->last_byte_received; i += ld->psize) {
                 i = i % ld->my_bsize + ld->first_byte_in_buf;
                 assert(i - ld->first_byte_in_buf < ld->my_bsize);
-                std::cerr << "i: " << i << " last_byte_received: " << ld->last_byte_received << std::endl;
                 if (i != ld->last_byte_received && (i >= ld->first_byte_in_buf + ld->my_bsize ||
                     !ld->received[(i - ld->first_byte_in_buf) / ld->psize])) {
                     to_rexmit.push_back(i);
@@ -179,20 +148,16 @@ void send_rexmit(size_t rtime, uint16_t control_port) {
             addr = ld->station_address;
             addr.sin_port = htons(control_port);
 
-            // std::cerr << "chuj, " << ld->last_byte_received - ld->byte_to_write << std::endl;
-
             CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
             if (to_rexmit.size() > 0) {
                 std::string rexmit_msg = "LOUDER_PLEASE ";
                 for (uint64_t i = 0; i < to_rexmit.size(); i++) {
                     rexmit_msg += std::to_string(to_rexmit[i]) + ",";
                 }
-                // delete last comma
                 if (to_rexmit.size() > 0) {
                     rexmit_msg.pop_back();
                 }
                 rexmit_msg += "\n";
-                std::cerr << "sending remix " << rexmit_msg;
                 sendto(socket_fd, rexmit_msg.c_str(), rexmit_msg.size(), 0, (struct sockaddr *) &addr,  sizeof(addr));
                 to_rexmit.clear();
             }
@@ -226,7 +191,6 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
         ld->selected.store(false);
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
         pthread_cond_signal(&ld->write);
-        std::cerr << "chuj, " << ld->last_byte_received - ld->byte_to_write << std::endl;
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
         CHECK_ERRNO(close(ld->socket_fd));
         return;
@@ -243,7 +207,6 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     locked_data_set(ld, bsize, psize, data_socket_fd, session_id, byte_zero, sender_addr);
     memcpy(ld->data, receive_buf + 2 * sizeof(uint64_t), psize);
     ld->received[0] = true;
-    std::cerr << "chuj2, " << ld->last_byte_received - ld->byte_to_write << std::endl;
     CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     uint64_t first_byte_num = 0;
     while(ld->selected) {
@@ -271,7 +234,6 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
 
         if (session_id == ld->session && first_byte_num >= ld->first_byte_in_buf) {
             ld->last_byte_received = max(ld->last_byte_received, first_byte_num);
-            // std::cerr << "last_byte_received: " << ld->last_byte_received << "first_byte_in_buf: " << ld->first_byte_in_buf << "my_bsize: " << ld->my_bsize << "\n";
             
             if (first_byte_num >= ld->first_byte_in_buf + 3 * ld->my_bsize / 4) {
                 ld->started_printing = true;
@@ -283,7 +245,6 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
                 if (ld->first_byte_in_buf + ld->my_bsize < 
                     first_byte_num - ld->my_bsize + ld->psize) {
                     // many missing packets - save last raceived packet to the end of the buffer
-                    std::cerr << "ZERUJEMY KURWA2\n";
                     memset(ld->received, 0, ld->my_bsize / ld->psize);
                     ld->first_byte_in_buf = first_byte_num + ld->psize - ld->my_bsize;
                 } else {
@@ -297,8 +258,6 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
                     }
                 }
             }
-            
-            // print_missing(first_byte_num);
 
             // not to double writing thread
             if (first_byte_num == ld->byte_to_write + ld->bsize) {
@@ -316,7 +275,6 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
                 pthread_cond_signal(&ld->write);
             }
         }
-        std::cerr << "chuj5, " << ld->last_byte_received - ld->byte_to_write << std::endl;
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
         // usleep(100);
     }
@@ -347,8 +305,6 @@ void writer_main() {
         for (size_t i = 0; i < ld->my_bsize / ld->psize; i++) {
             sum += ld->received[i];
         }
-        std::cerr << "SUMkurwa: " << sum << std::endl;
-
 
         if (ld->byte_to_write < ld->first_byte_in_buf) {
             if (ld->byte_to_write + ld->my_bsize > ld->first_byte_in_buf) {
@@ -376,7 +332,6 @@ void writer_main() {
 
             ld->received[index_to_write / ld->psize] = false;
         }
-        // std::cerr << "byte_to_write: " << ld->byte_to_write << "last_byte_received: " << ld->last_byte_received << "\n";
         assert(ld->byte_to_write <= ld->last_byte_received);
         ld->byte_to_write += ld->psize;
 
@@ -385,17 +340,10 @@ void writer_main() {
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
         usleep(100);
         fwrite(buf_to_print, 1, ld->psize, stdout);
-        // for (size_t i = 0; i < ld->psize; i++) {
-        //     printf("%c", buf_to_print[i]);
-        // }
     }
 }
 
 void send_lookup(uint16_t port, const char *addr, int socket_fd) {
-    // uint16_t data = *(static_cast<uint16_t*>(arg));
-    // struct ControlData *data = static_cast<struct ControlData*>(arg);
-    // uint16_t port = data->port;
-    // int socket_fd = data->socket_fd;
     const char *message = "ZERO_SEVEN_COME_IN\n";
     int broadcast_permission = 1;
 
@@ -424,10 +372,6 @@ void send_lookup(uint16_t port, const char *addr, int socket_fd) {
         }
         CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
         gettimeofday(&tp, NULL);
-        // uint64_t time = tp.tv_sec * 1000 + tp.tv_usec / 1000;
-        // for (const auto &it : stations) {
-        //     std::cerr << it.first.name << " " << time - it.second << "\n";
-        // }
         CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
         sleep(5);
     }
@@ -445,11 +389,6 @@ void receive_reply(int socket_fd) {
         if (std::regex_match(message, matches, REPLY_REGEX)) {
             gettimeofday(&tp, NULL);
             uint64_t time = tp.tv_sec * 1000 + tp.tv_usec / 1000;
-            // std::istringstream ss(message.substr(13));
-            // std::string mcast_addr;
-            // uint16_t port;
-            // std::string name;
-            // ss >> mcast_addr >> port >> name;
             pthread_mutex_lock(&stations_mutex);
             std::string mcast_addr = matches[1].str();
             pthread_mutex_unlock(&stations_mutex);
@@ -469,31 +408,13 @@ void receive_reply(int socket_fd) {
                     fatal("write() failed");
                 }
             }
-            // stations[station] = time;
             if (stations.size() == 1) {
                 selected_station = stations.begin();
                 CHECK_ERRNO(pthread_cond_signal(&no_stations));
-                // std::thread writer_thread(writer_main);
-                // std::thread reader_thread(reader_main, station.mcast_addr, data_port, bsize);
 
             }
             CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
         }
-
-        // CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
-        // for (auto it = stations.begin(); it != stations.end();) {
-        //     gettimeofday(&tp, NULL);
-        //     uint64_t time = tp.tv_sec * 1000 + tp.tv_usec / 1000;
-        //     if (it->second + 20000 < time) {
-        //         printf("PAPA SENDER\n");
-        //         remove_station(it++);
-        //         printf("PAPA SENDER2\n");
-        //         write(pipe_fd[1], "r", 1);
-        //     } else {
-        //         it++;
-        //     }
-        // }
-        // CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
     }
 }
 
@@ -513,11 +434,9 @@ std::string make_ui() {
 }
 
 void handle_ui(uint16_t port) {
-    // uint16_t port = *(static_cast<uint16_t*>(arg));
     int connections = 5;
     int buf_size = 4;
 
-    // char buf[connections][buf_size];
     std::vector<char *> buf(connections);
 
     std::vector<ssize_t> buf_len(connections);
@@ -670,9 +589,6 @@ void handle_ui(uint16_t port) {
 }
 
 int main(int argc, char *argv[]) {
-    // uint16_t data_port = 29978;
-    // size_t bsize = 655368;
-    // data_port = 29978;
     bsize = 655368;
     uint16_t control_port = 39978;
     const char* discover_addr = BROADCAST_IP;
@@ -682,10 +598,12 @@ int main(int argc, char *argv[]) {
     while((flag = getopt(argc, argv, "b:C:d:U:n:R:")) != -1) {
         switch(flag) {
             case 'b':
-                bsize = strtoul(optarg, NULL, 10);
-                PRINT_ERRNO();
+                bsize = check_number(optarg);
                 break;
             case 'C':
+                if (is_valid_number(optarg) == 0) {
+                    fatal("Wrong control port");
+                }
                 control_port = read_port(optarg);
                 break;
             case 'd':
@@ -724,36 +642,6 @@ int main(int argc, char *argv[]) {
     CHECK(pipe(pipe_fd));
     CHECK(pipe(reader_pipe_fd));
 
-    // /* ustawienie adresu i portu odbiorcy */
-    // struct sockaddr_in remote_address;
-    // remote_address.sin_family = AF_INET;
-    // remote_address.sin_port = htons(control_port);
-    // if (inet_aton(discover_addr, &remote_address.sin_addr) == 0) {
-    //     fprintf(stderr, "ERROR: inet_aton - invalid multicast address\n");
-    //     exit(EXIT_FAILURE);
-    // }
-
-    // int broadcast_permission = 1;
-    // // Set socket options to allow broadcast
-    // if (setsockopt(socket_fd, SOL_SOCKET, SO_BROADCAST, (void *)&broadcast_permission,
-    //                sizeof(broadcast_permission)) < 0) {
-    //     fatal("setsockopt() failed");
-    // }
-
-    // int optval = 4;
-    // CHECK_ERRNO(setsockopt(socket_fd, IPPROTO_IP, IP_MULTICAST_TTL, (void *) &optval, sizeof(optval)));
-
-    // bind_socket2(socket_fd, control_port);
-    // ctrl_data->socket_fd = socket_fd;
-    // ctrl_data->port = control_port;
-
-    // pthread_t send_lookup_thread;
-    // pthread_t receive_reply_thread;
-    // pthread_t ui_thread;
-
-    // pthread_create(&send_lookup_thread, NULL, send_lookup, static_cast<void*>(ctrl_data));
-    // pthread_create(&receive_reply_thread, NULL, receive_reply, static_cast<void*>(&socket_fd));
-    // pthread_create(&ui_thread, NULL, handle_ui, static_cast<void*>(&ui_port));
     std::thread ui_thread(handle_ui, ui_port);
     std::thread send_lookup_thread(send_lookup, control_port, discover_addr, socket_fd);
     std::thread receive_reply_thread(receive_reply, socket_fd);
@@ -763,28 +651,16 @@ int main(int argc, char *argv[]) {
     std::thread rexmit_thread(send_rexmit, rtime, control_port);
 
     while (true) {
-        std::cerr << "mainlock\n";
         CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
         while (stations.empty()) {
-            std::cerr << "mainwait\n";
             CHECK_ERRNO(pthread_cond_wait(&no_stations, &stations_mutex));
         }
-        std::cerr << "mainwriter\n";
         ld->started_printing = false;
         ld->selected = true;
-        // std::thread reader_thread(reader_main, "239.10.11.12", data_port, bsize);
-        // std::cerr << strcmp(selected_station->first.mcast_addr, "239.10.11.12") << " " << selected_station->first.data_port << "\n";
         std::thread reader_thread(reader_main, selected_station->first.mcast_addr.c_str(), selected_station->first.data_port, bsize);
         std::thread writer_thread(writer_main);
-        // std::cerr << "WYPUŚCIŁEM " << selected_station->first.name << " " << selected_station->first.mcast_addr << " " << selected_station->first.data_port << "\n";
-        //iterate over stations
-        // for (auto it = stations.begin(); it != stations.end(); it++) {
-        //     std::cerr << it->first.name << " " << it->first.mcast_addr << " " << it->first.data_port << "\n";
-        // }
-        std::cerr << "mainunlock\n";
         CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
         writer_thread.join();
-        std::cerr << "mainreadjoin\n";
         reader_thread.join();
     }
 
@@ -792,7 +668,5 @@ int main(int argc, char *argv[]) {
     send_lookup_thread.join();
     receive_reply_thread.join();
     rexmit_thread.join();
-    // pthread_join(send_lookup_thread, NULL);
-    // pthread_join(receive_reply_thread, NULL);
     return 0;
 }

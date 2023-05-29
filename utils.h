@@ -53,7 +53,6 @@ struct LockedData {
 
 struct RadioStation {
   std::string name;
-//   const char mcast_addr;
   std::string mcast_addr;
   uint16_t data_port;
 };
@@ -63,7 +62,6 @@ bool operator<(const struct RadioStation& a, const struct RadioStation& b) {
 }
 
 bool operator==(const struct RadioStation& a, const struct RadioStation& b) {
-//   return a.name == b.name && strcmp(a.mcast_addr, b.mcast_addr) == 0 && a.data_port == b.data_port;
     return a.name == b.name && a.mcast_addr == b.mcast_addr && a.data_port == b.data_port;
 }
 
@@ -74,8 +72,6 @@ uint64_t max(uint64_t a, uint64_t b) {
 void locked_data_set(struct LockedData* ld, uint64_t bsize, uint64_t psize, 
                       uint64_t socket_fd, uint64_t session, uint64_t byte_zero, 
                       sockaddr_in station_address) {
-//   pthread_mutex_init(&ld->mutex, NULL);
-//   pthread_cond_init(&ld->write, NULL);
   ld->first_byte_in_buf = byte_zero;
   ld->byte_to_write = byte_zero;
   ld->last_byte_received = byte_zero;
@@ -108,65 +104,6 @@ uint16_t read_port(char *string) {
     }
 
     return (uint16_t) port;
-}
-
-// int bind_socket(uint16_t port) {
-//     int socket_fd = socket(AF_INET, SOCK_DGRAM, 0); // creating IPv4 UDP socket
-//     ENSURE(socket_fd >= 0);
-//     // after socket() call; we should close(sock) on any execution path;
-
-//     struct sockaddr_in server_address;
-//     server_address.sin_family = AF_INET; // IPv4
-//     server_address.sin_addr.s_addr = htonl(INADDR_ANY); // listening on all interfaces
-//     server_address.sin_port = htons(port);
-
-//     // bind the socket to a concrete address
-//     CHECK_ERRNO(bind(socket_fd, (struct sockaddr *) &server_address,
-//                         (socklen_t) sizeof(server_address)));
-
-//     return socket_fd;
-// }
-
-
-// TODO: to trzeba poprawić
-size_t read_message(int socket_fd, struct sockaddr_in *client_address, void *buffer, 
-                    size_t max_length, const char *expected_src_addr) {
-    socklen_t address_length = (socklen_t) sizeof(*client_address);
-    int flags = 0; // we do not request anything special
-    errno = 0;
-    ssize_t len = 0; 
-
-    struct addrinfo hints, *expected_ip;
-    char ip_str[INET6_ADDRSTRLEN];
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    if (expected_src_addr != NULL) {
-        CHECK(getaddrinfo(expected_src_addr, NULL, &hints, &expected_ip));
-        void *addr;
-        if (expected_ip->ai_family == AF_INET) {
-            // IPv4 address
-            struct sockaddr_in *ipv4 = (struct sockaddr_in *)expected_ip->ai_addr;
-            addr = &(ipv4->sin_addr);
-        } else {
-            // IPv6 address
-            struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)expected_ip->ai_addr;
-            addr = &(ipv6->sin6_addr);
-        }
-
-        // Convert the IP address to a string
-        inet_ntop(expected_ip->ai_family, addr, ip_str, sizeof(ip_str));
-    }
-
-
-    do {
-        len = recvfrom(socket_fd, buffer, max_length, flags,
-                      (struct sockaddr *) client_address, &address_length);
-    } while (expected_src_addr != NULL && strcmp(ip_str, inet_ntoa(client_address->sin_addr)) != 0);
-    if (len < 0) {
-        PRINT_ERRNO();
-    }
-    return (size_t) len;
 }
 
 inline static size_t receive_message(int socket_fd, void *buffer, size_t max_length, int flags) {
@@ -203,7 +140,7 @@ ssize_t receive_or_interrupt(int socket_fd, void *buffer, size_t max_length, int
 
     int activity = select(maxfd + 1, &readfds, NULL, NULL, NULL);
 
-    char *interrupt_buf = static_cast<char*>(std::malloc(1));
+    char interrupt_buf[1];
     if (activity == -1) {
         PRINT_ERRNO();
     }
@@ -240,19 +177,9 @@ void send_message(int socket_fd, const struct sockaddr_in *send_address,
     }
 }
 
-// inline static void set_port_reuse(int socket_fd) {
-//     int option_value = 1;
-//     CHECK_ERRNO(setsockopt(socket_fd, SOL_SOCKET, SO_REUSEPORT, &option_value, sizeof(option_value)));
-// }
-
 inline static void set_socket_flag(int socket_fd, int flag, int level = SOL_SOCKET) {
     int option_value = 1;
     CHECK_ERRNO(setsockopt(socket_fd, level, flag, &option_value, sizeof(option_value)));
-}
-
-inline static void set_addr_reuse(int socket_fd) {
-    int option_value = 1;
-    CHECK_ERRNO(setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &option_value, sizeof(option_value)));
 }
 
 inline static int open_udp_socket() {
@@ -295,24 +222,6 @@ inline static int accept_connection(int socket_fd, struct sockaddr_in *client_ad
     return client_fd;
 }
 
-size_t recv_with_timeout(int socket_fd, void *buffer, size_t length, int flags, int timeout) {
-    fd_set read_set;
-    FD_ZERO(&read_set);
-    FD_SET(socket_fd, &read_set);
-
-    struct timeval tv;
-    tv.tv_sec = timeout;
-    tv.tv_usec = 0;
-
-    int retval = select(socket_fd + 1, &read_set, NULL, NULL, &tv);
-    if (retval == -1) {
-        PRINT_ERRNO();
-    } else if (retval == 0) {
-        return 0;
-    } 
-    return receive_message(socket_fd, buffer, length, flags);
-}
-
 std::string receive_string(int socket_fd, size_t max_length, int flags = 0, struct sockaddr_in *client_address = NULL) {
     char *buf = static_cast<char*>(malloc(MAX_UDP_DATAGRAM_SIZE));
     size_t received_length;
@@ -320,7 +229,7 @@ std::string receive_string(int socket_fd, size_t max_length, int flags = 0, stru
         received_length = receive_message(socket_fd, buf, max_length, flags);
     }
     else {
-        received_length = read_message(socket_fd, client_address, buf, max_length, NULL);
+        received_length = receive_message_from(socket_fd, buf, max_length, flags, client_address);
     }
     std::string result(buf, received_length);
     free(buf);
@@ -330,19 +239,13 @@ std::string receive_string(int socket_fd, size_t max_length, int flags = 0, stru
 bool is_valid_mcast(const char* address) {
     struct in_addr addr;
     
-    // Convert the address string to network byte order
     if (inet_aton(address, &addr) == 0) {
-        // Failed to convert address
         return 0;
     }
     
-    // Check if the address is a multicast address
     if (IN_MULTICAST(ntohl(addr.s_addr))) {
-        // Proper multicast address
         return 1;
     }
-    
-    // Not a multicast address
     return 0;
 }
 
@@ -381,7 +284,7 @@ bool is_valid_number(const std::string &number) {
 
 size_t check_number(const std::string &number) {
     if(!is_valid_number(number)) {
-        fatal("Wrong fsize");
+        fatal("Wrong number");
     }
     size_t result = strtol(optarg, NULL, 10);
     PRINT_ERRNO();

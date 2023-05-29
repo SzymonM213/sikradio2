@@ -90,9 +90,7 @@ void handle_control_port(uint16_t ctrl_port, const char *mcast_addr,
 
     while (!ended) {
         struct sockaddr_in sender_addr;
-        // socklen_t sender_addr_len = sizeof(sender_addr);
         
-        // std::cerr << "Waiting for message" << std::endl;
         // std::string message = receive_string(socket_fd, MAX_UDP_DATAGRAM_SIZE, 0, &sender_addr);
         char *buffer = (char *) malloc(MAX_UDP_DATAGRAM_SIZE);
         if (receive_or_interrupt(socket_fd, buffer, MAX_UDP_DATAGRAM_SIZE, pipe_end[0], &sender_addr) < 0) {
@@ -101,12 +99,10 @@ void handle_control_port(uint16_t ctrl_port, const char *mcast_addr,
         }
         // std::cerr << "Received message: " << buffer;
         std::string message(buffer);
-        std::cerr << "Received message: " << message;
 
         if (message == LOOKUP_MSG) {
             send_message(socket_fd, &sender_addr, reply_msg.c_str(), reply_msg.length());
         } else if (message.size() > 13 && message.substr(0, 13) == REXMIT_MSG) {
-            std::cerr << "Received rexmit message" << std::endl;
             std::vector<size_t> numbers = parse_rexmit_list(message.substr(13), psize);
             if (!numbers.empty()) {
                 CHECK_ERRNO(pthread_mutex_lock(&rexmit_mutex));
@@ -116,6 +112,7 @@ void handle_control_port(uint16_t ctrl_port, const char *mcast_addr,
                 CHECK_ERRNO(pthread_mutex_unlock(&rexmit_mutex));
             }
         }
+        free(buffer);
     }
 }
 
@@ -125,7 +122,6 @@ void send_rexmit(int rtime, int socket_fd) {
         CHECK_ERRNO(pthread_mutex_lock(&queue_mutex));
         for (size_t i : rexmit_list) {
             if (queue.find(i) != queue.end()) {
-                std::cerr << "Sending rexmit for " << i << std::endl;
                 send_message(socket_fd, &send_address, queue[i], 2 * sizeof(uint64_t) + psize);
             }
         }
@@ -206,18 +202,9 @@ int main(int argc, char* argv[]) {
 
     CHECK(pipe(pipe_end));
 
-    // struct ControlData control_data = {ctrl_port, mcast_addr, data_port, name.c_str()};
-
-    // pthread_t control_thread;
-    // pthread_create(&control_thread, NULL, handle_control_port, &control_data);
     std::thread control_thread(handle_control_port, ctrl_port, mcast_addr, data_port, name.c_str());
 
     send_address = get_send_address(mcast_addr, data_port);
-
-    // int socket_fd = socket(PF_INET, SOCK_DGRAM, 0);
-    // if (socket_fd < 0) {
-    //     PRINT_ERRNO();
-    // }
 
     int socket_fd = open_udp_socket();
     set_socket_flag(socket_fd, SO_BROADCAST);
@@ -246,13 +233,13 @@ int main(int argc, char* argv[]) {
     while(fread(packet + 2 * sizeof(uint64_t), 1, psize, stdin)) {
         first_byte_to_send = htobe64(first_byte_num);
         memcpy(packet + sizeof(uint64_t), &first_byte_to_send, sizeof(uint64_t));
-        // std::cerr << "sending packet " << first_byte_num << "\n";
-        // if (first_byte_num / psize % 10 == 0) send_message(socket_fd, &send_address, packet, psize + 16);
+        // if (first_byte_num / psize % 50 != 0) send_message(socket_fd, &send_address, packet, psize + 16);
         send_message(socket_fd, &send_address, packet, psize + 16);
 
         CHECK_ERRNO(pthread_mutex_lock(&queue_mutex));
-        write_to_queue(packet, psize, first_byte_num);
+        write_to_queue(packet, psize + 16, first_byte_num);
         if (queue.size() > fsize / psize) {
+            free(queue[lowest_packet_number]);
             queue.erase(lowest_packet_number);
             lowest_packet_number += psize;
         }
@@ -268,4 +255,11 @@ int main(int argc, char* argv[]) {
 
     control_thread.join();
     rexmit_thread.join();
+
+    for (auto it : queue) {
+        free(it.second);
+    }
+
+    close(pipe_end[0]);
+    close(pipe_end[1]);
 }
