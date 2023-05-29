@@ -188,9 +188,6 @@ inline static size_t receive_message_from(int socket_fd, void *buffer, size_t ma
 // return -1 if interrupted
 ssize_t receive_or_interrupt(int socket_fd, void *buffer, size_t max_length, int interrupt_dsc, 
                             struct sockaddr_in *client_address = NULL) {
-
-    std::cerr << "interrupt_dsc: " << interrupt_dsc << "\n";
-
     fd_set readfds;
     FD_ZERO(&readfds);
     FD_SET(socket_fd, &readfds);

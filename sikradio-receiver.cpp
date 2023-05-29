@@ -66,7 +66,7 @@ void move_selected_station(bool up) {
         if(write(reader_pipe_fd[1], "1", 1) < 0) {
             fatal("write");
         }
-        ld->selected = false;
+        ld->selected.store(false);
         return;
     }
     if(!up) {
@@ -78,7 +78,6 @@ void move_selected_station(bool up) {
 
         // CHECK_ERRNO(pthread_mutex_unlock(&stations_mutex));
     }
-    // check up arrow
     else {
         // CHECK_ERRNO(pthread_mutex_lock(&stations_mutex));
         if (selected_station == stations.begin()) {
@@ -94,7 +93,7 @@ void move_selected_station(bool up) {
     if(write(reader_pipe_fd[1], "1", 1) < 0) {
         fatal("write");
     }
-    ld->selected = false;
+    ld->selected.store(false);
 }
 
 void remove_station(std::map<RadioStation, uint64_t>::iterator station) {
@@ -104,6 +103,12 @@ void remove_station(std::map<RadioStation, uint64_t>::iterator station) {
         for (auto it = stations.begin(); it != stations.end(); it++) {
             if (it->first.name == fav_name) {
                 selected_station = it;
+                // if(write(pipe_fd[1], "1", 1) < 0)  {
+                //     fatal("write");
+                // }
+                if(write(reader_pipe_fd[1], "1", 1) < 0) {
+                    fatal("write");
+                }
                 return;
             }
         }
@@ -182,9 +187,13 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
     psize = receive_or_interrupt(data_socket_fd, receive_buf, MAX_UDP_DATAGRAM_SIZE, reader_pipe_fd[0]) - 16;
     std::cerr << "chuj2\n";
     if (psize < 0) {
+        ld->selected.store(false);
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
         pthread_cond_signal(&ld->write);
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
+        CHECK_ERRNO(close(ld->socket_fd));
+        std::cerr << "koniec readera2\n";
+        return;
     }
     uint64_t session_id = 0;
     uint64_t byte_zero;
@@ -261,6 +270,7 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
             memcpy(ld->data + (first_byte_num - ld->first_byte_in_buf), 
                    receive_buf + 16, ld->psize);
             std::cerr << "first_byte_num: " << first_byte_num << "first_byte_in_buf: " << ld->first_byte_in_buf << "\n";
+            std::cerr << "my_bsize: " << ld->my_bsize << "\n";
             assert(first_byte_num >= ld->first_byte_in_buf && 
                    first_byte_num - ld->first_byte_in_buf < ld->my_bsize);
             ld->received[(first_byte_num - ld->first_byte_in_buf) / ld->psize] = true;
@@ -271,6 +281,7 @@ void reader_main(const char *src_addr, uint16_t data_port, size_t bsize) {
         }
         CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
     }
+    ld->selected.store(false);
     CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
     pthread_cond_signal(&ld->write);
     CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
@@ -286,9 +297,12 @@ void writer_main() {
     while(ld->selected) {
         CHECK_ERRNO(pthread_mutex_lock(&ld->mutex));
         while (!ld->started_printing || ld->byte_to_write > ld->last_byte_received) {
+            std::cerr << "writer sie wiesza\n";
             pthread_cond_wait(&ld->write, &ld->mutex);
+            std::cerr << "writer sie nie wiesza\n";
             if (!ld->selected) {
                 CHECK_ERRNO(pthread_mutex_unlock(&ld->mutex));
+                std::cerr << "koniec writera2\n";
                 return;
             }
         }
@@ -375,23 +389,13 @@ void send_lookup(uint16_t port, const char *addr, int socket_fd) {
     }
 }
 
-void receive_reply(int socket_fd) {
-    // struct sockaddr_in sender_addr;
-    // int socket_fd = *(static_cast<int*>(arg));
-    
+void receive_reply(int socket_fd) {    
     char *buf = static_cast<char*>(malloc(MAX_UDP_DATAGRAM_SIZE));
     memset(buf, 0, MAX_UDP_DATAGRAM_SIZE);
 
     struct timeval tp;
 
-    // std::regex reply = std::regex("^BOREWICZ_HERE\\s(\\S+)\\s(\\d{1, 5})\\s([\\x20-\\x7F]{1, 64})\\n$");
-    // std::regex reply(REPLY_MSG);
-
     while (true) {
-        // size_t len = read_message(socket_fd, &sender_addr, buf, MAX_UDP_DATAGRAM_SIZE, NULL);
-        // size_t len = receive_message(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0);
-        // size_t len = recv_with_timeout(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0, 1);
-        // size_t len = recv(socket_fd, buf, MAX_UDP_DATAGRAM_SIZE, 0);
         std::string message = receive_string(socket_fd, MAX_UDP_DATAGRAM_SIZE);
         std::cerr << "received: " << message;
         std::smatch matches;
@@ -636,18 +640,15 @@ void handle_ui(uint16_t port) {
 int main(int argc, char *argv[]) {
     // uint16_t data_port = 29978;
     // size_t bsize = 655368;
-    data_port = 29978;
+    // data_port = 29978;
     bsize = 655368;
     uint16_t control_port = 39978;
     const char* discover_addr = BROADCAST_IP;
-    const char* fname = "";
     uint16_t ui_port = 19978;
     int flag;
-    while((flag = getopt(argc, argv, "P:b:C:d:U:n")) != -1) {
+    size_t rtime = 250;
+    while((flag = getopt(argc, argv, "b:C:d:U:n:R:")) != -1) {
         switch(flag) {
-            case 'P':
-                data_port = read_port(optarg);
-                break;
             case 'b':
                 bsize = atoi(optarg);
                 break;
@@ -661,8 +662,10 @@ int main(int argc, char *argv[]) {
                 ui_port = read_port(optarg);
                 break;
             case 'n':
-                // fav_name = optarg;
-                fname = optarg;
+                fav_name = std::string(optarg);
+                break;
+            case 'R':
+                rtime = atoi(optarg);
                 break;
             default:
                 fatal("Wrong flag");
@@ -671,7 +674,6 @@ int main(int argc, char *argv[]) {
     if (bsize < 1) {
         fatal("Wrong buffer size");
     }
-    fav_name = fname;
 
     int socket_fd = open_udp_socket();
     set_socket_flag(socket_fd, SO_BROADCAST);
@@ -750,10 +752,10 @@ int main(int argc, char *argv[]) {
         // }
         ld->selected = true;
         ld->started_printing = false;
-        std::thread writer_thread(writer_main);
         // std::thread reader_thread(reader_main, "239.10.11.12", data_port, bsize);
         // std::cerr << strcmp(selected_station->first.mcast_addr, "239.10.11.12") << " " << selected_station->first.data_port << "\n";
         std::thread reader_thread(reader_main, selected_station->first.mcast_addr.c_str(), selected_station->first.data_port, bsize);
+        std::thread writer_thread(writer_main);
         // std::cerr << "WYPUŚCIŁEM " << selected_station->first.name << " " << selected_station->first.mcast_addr << " " << selected_station->first.data_port << "\n";
         //iterate over stations
         // for (auto it = stations.begin(); it != stations.end(); it++) {
